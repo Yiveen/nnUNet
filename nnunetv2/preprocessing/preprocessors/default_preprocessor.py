@@ -51,11 +51,11 @@ class DefaultPreprocessor(object):
         # apply transpose_forward, this also needs to be applied to the spacing!
         data = data.transpose([0, *[i + 1 for i in plans_manager.transpose_forward]])
         if seg is not None:
-            seg = seg.transpose([0, *[i + 1 for i in plans_manager.transpose_forward]])
+            seg = seg.transpose([0, *[i + 1 for i in plans_manager.transpose_forward]]) #plans_manager.transpose_forward : [0,1,2]
         original_spacing = [properties['spacing'][i] for i in plans_manager.transpose_forward]
 
         # crop, remember to store size before cropping!
-        shape_before_cropping = data.shape[1:]
+        shape_before_cropping = data.shape[1:] #到这里datat还是没有进行任何处理的data
         properties['shape_before_cropping'] = shape_before_cropping
         # this command will generate a segmentation. This is important because of the nonzero mask which we may need
         data, seg, bbox = crop_to_nonzero(data, seg)
@@ -69,7 +69,7 @@ class DefaultPreprocessor(object):
         if len(target_spacing) < len(data.shape[1:]):
             # target spacing for 2d has 2 entries but the data and original_spacing have three because everything is 3d
             # in 2d configuration we do not change the spacing between slices
-            target_spacing = [original_spacing[0]] + target_spacing
+            target_spacing = [original_spacing[0]] + target_spacing # [1.0, 0.7871090173721313, 0.7871090173721313]
         new_shape = compute_new_shape(data.shape[1:], original_spacing, target_spacing)
 
         # normalize
@@ -128,11 +128,11 @@ class DefaultPreprocessor(object):
         rw = plans_manager.image_reader_writer_class()
 
         # load image(s)
-        data, data_properties = rw.read_images(image_files)
+        data, data_properties = rw.read_images(image_files) #在内部处理中会vstack一下，然后会产生一个新的维度。data [1, 326,512,512] data_properties就是simpleitk的属性
 
         # if possible, load seg
         if seg_file is not None:
-            seg, _ = rw.read_seg(seg_file)
+            seg, _ = rw.read_seg(seg_file) #seg文件的大小
         else:
             seg = None
 
@@ -145,6 +145,8 @@ class DefaultPreprocessor(object):
                       dataset_json: Union[dict, str]):
         data, seg, properties = self.run_case(image_files, seg_file, plans_manager, configuration_manager, dataset_json)
         # print('dtypes', data.dtype, seg.dtype)
+        #TODO:在experiment里面规划key file的路径存储，然后在这里读取，转换成目标大小，然后生成高斯核
+        # 还需要check怎么样分成patch
         np.savez_compressed(output_filename_truncated + '.npz', data=data, seg=seg)
         write_pickle(properties, output_filename_truncated + '.pkl')
 

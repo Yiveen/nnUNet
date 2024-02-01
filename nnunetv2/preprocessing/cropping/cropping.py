@@ -29,8 +29,8 @@ def crop_to_nonzero(data, seg=None, nonzero_label=-1):
     :param nonzero_label: this will be written into the segmentation map
     :return:
     """
-    nonzero_mask = create_nonzero_mask(data)
-    bbox = get_bbox_from_mask(nonzero_mask)
+    nonzero_mask = create_nonzero_mask(data) #nonzero_mask:(326,512,512)
+    bbox = get_bbox_from_mask(nonzero_mask) #bbox: [[0,326],[0,512],[0,512]]
 
     slicer = bounding_box_to_slice(bbox)
     data = data[tuple([slice(None), *slicer])]

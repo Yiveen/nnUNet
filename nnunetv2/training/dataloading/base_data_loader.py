@@ -24,7 +24,7 @@ class nnUNetDataLoaderBase(DataLoader):
 
         self.oversample_foreground_percent = oversample_foreground_percent
         self.final_patch_size = final_patch_size
-        self.patch_size = patch_size
+        self.patch_size = patch_size #(208,238,196)
         self.list_of_keys = list(self._data.keys())
         # need_to_pad denotes by how much we need to pad the data so that if we sample a patch of size final_patch_size
         # (which is what the network will get) these patches will also cover the border of the images
@@ -57,8 +57,8 @@ class nnUNetDataLoaderBase(DataLoader):
         data, seg, properties = self._data.load_case(self.indices[0])
         num_color_channels = data.shape[0]
 
-        data_shape = (self.batch_size, num_color_channels, *self.patch_size)
-        seg_shape = (self.batch_size, seg.shape[0], *self.patch_size)
+        data_shape = (self.batch_size, num_color_channels, *self.patch_size) #num_color_channels=1
+        seg_shape = (self.batch_size, seg.shape[0], *self.patch_size) #seg.shape[0]=1
         return data_shape, seg_shape
 
     def get_bbox(self, data_shape: np.ndarray, force_fg: bool, class_locations: Union[dict, None],
@@ -76,13 +76,13 @@ class nnUNetDataLoaderBase(DataLoader):
 
         # we can now choose the bbox from -need_to_pad // 2 to shape - patch_size + need_to_pad // 2. Here we
         # define what the upper and lower bound can be to then sample form them with np.random.randint
-        lbs = [- need_to_pad[i] // 2 for i in range(dim)]
+        lbs = [- need_to_pad[i] // 2 for i in range(dim)] #for （183,256,256），lbs=[-48,-39,-34], ubs=[-23,-63,-100], need_to_pad=[96,78,68]
         ubs = [data_shape[i] + need_to_pad[i] // 2 + need_to_pad[i] % 2 - self.patch_size[i] for i in range(dim)]
 
         # if not force_fg then we can just sample the bbox randomly from lb and ub. Else we need to make sure we get
         # at least one of the foreground classes in the patch
         if not force_fg and not self.has_ignore:
-            bbox_lbs = [np.random.randint(lbs[i], ubs[i] + 1) for i in range(dim)]
+            bbox_lbs = [np.random.randint(lbs[i], ubs[i] + 1) for i in range(dim)] #[8,31,72]
             # print('I want a random location')
         else:
             if not force_fg and self.has_ignore:
@@ -92,7 +92,7 @@ class nnUNetDataLoaderBase(DataLoader):
                     print('Warning! No annotated pixels in image!')
                     selected_class = None
                 # print(f'I have ignore labels and want to pick a labeled area. annotated_classes_key: {self.annotated_classes_key}')
-            elif force_fg:
+            elif force_fg: #True
                 assert class_locations is not None, 'if force_fg is set class_locations cannot be None'
                 if overwrite_class is not None:
                     assert overwrite_class in class_locations.keys(), 'desired class ("overwrite_class") does not ' \
@@ -104,7 +104,7 @@ class nnUNetDataLoaderBase(DataLoader):
                 # if we have annotated_classes_key locations and other classes are present, remove the annotated_classes_key from the list
                 # strange formulation needed to circumvent
                 # ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
-                tmp = [i == self.annotated_classes_key if isinstance(i, tuple) else False for i in eligible_classes_or_regions]
+                tmp = [i == self.annotated_classes_key if isinstance(i, tuple) else False for i in eligible_classes_or_regions] #False
                 if any(tmp):
                     if len(eligible_classes_or_regions) > 1:
                         eligible_classes_or_regions.pop(np.where(tmp)[0][0])
@@ -134,6 +134,6 @@ class nnUNetDataLoaderBase(DataLoader):
                 # If the image does not contain any foreground classes, we fall back to random cropping
                 bbox_lbs = [np.random.randint(lbs[i], ubs[i] + 1) for i in range(dim)]
 
-        bbox_ubs = [bbox_lbs[i] + self.patch_size[i] for i in range(dim)]
+        bbox_ubs = [bbox_lbs[i] + self.patch_size[i] for i in range(dim)] #上界，保证一定是patch size大小 [216,269,268]
 
         return bbox_lbs, bbox_ubs

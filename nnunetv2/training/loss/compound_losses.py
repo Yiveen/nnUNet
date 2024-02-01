@@ -21,9 +21,9 @@ class DC_and_CE_loss(nn.Module):
         if ignore_label is not None:
             ce_kwargs['ignore_index'] = ignore_label
 
-        self.weight_dice = weight_dice
-        self.weight_ce = weight_ce
-        self.ignore_label = ignore_label
+        self.weight_dice = weight_dice #1
+        self.weight_ce = weight_ce #1
+        self.ignore_label = ignore_label #None
 
         self.ce = RobustCrossEntropyLoss(**ce_kwargs)
         self.dc = dice_class(apply_nonlin=softmax_helper_dim1, **soft_dice_kwargs)
@@ -47,7 +47,7 @@ class DC_and_CE_loss(nn.Module):
         else:
             target_dice = target
             mask = None
-
+        # output (4,2,112,160,128) target (4,1,112,160,128)
         dc_loss = self.dc(net_output, target_dice, loss_mask=mask) \
             if self.weight_dice != 0 else 0
         ce_loss = self.ce(net_output, target[:, 0].long()) \

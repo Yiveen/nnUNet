@@ -39,16 +39,18 @@ class nnUNetDataset(object):
         if case_identifiers is None:
             case_identifiers = get_case_identifiers(folder)
         case_identifiers.sort()
+        #所有训练数据,没有进行k折交叉验证分开['arota_001', 'arota_003', 'arota_005', 'arota_006', 'arota_008', 'arota_009', 'arota_010', 'arota_011', 'arota_012', 'arota_013', 'arota_014', 'arota_016', 'arota_017', 'arota_018', 'arota_019', 'arota_020', 'arota_021', 'arota_022', 'arota_023', 'arota_024', 'arota_025', 'arota_026', 'arota_027', 'arota_029', 'arota_030', 'arota_033', 'arota_035', 'arota_036', 'arota_037']
+
 
         self.dataset = {}
         for c in case_identifiers:
             self.dataset[c] = {}
-            self.dataset[c]['data_file'] = join(folder, f"{c}.npz")
-            self.dataset[c]['properties_file'] = join(folder, f"{c}.pkl")
+            self.dataset[c]['data_file'] = join(folder, f"{c}.npz") #对应processed文件夹下面的npz文件
+            self.dataset[c]['properties_file'] = join(folder, f"{c}.pkl") #对应processed文件夹下面的pkl文件
             if folder_with_segs_from_previous_stage is not None:
                 self.dataset[c]['seg_from_prev_stage_file'] = join(folder_with_segs_from_previous_stage, f"{c}.npz")
 
-        if len(case_identifiers) <= num_images_properties_loading_threshold:
+        if len(case_identifiers) <= num_images_properties_loading_threshold:#num_images_properties_loading_threshold==0
             for i in self.dataset.keys():
                 self.dataset[i]['properties'] = load_pickle(self.dataset[i]['properties_file'])
 
@@ -83,7 +85,7 @@ class nnUNetDataset(object):
             data = entry['open_data_file']
             # print('using open data file')
         elif isfile(entry['data_file'][:-4] + ".npy"):
-            data = np.load(entry['data_file'][:-4] + ".npy", 'r')
+            data = np.load(entry['data_file'][:-4] + ".npy", 'r') #(1,170,241,241)
             if self.keep_files_open:
                 self.dataset[key]['open_data_file'] = data
                 # print('saving open data file')

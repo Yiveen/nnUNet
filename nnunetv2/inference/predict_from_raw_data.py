@@ -73,9 +73,9 @@ class nnUNetPredictor(object):
         if use_folds is None:
             use_folds = nnUNetPredictor.auto_detect_available_folds(model_training_output_dir, checkpoint_name)
 
-        dataset_json = load_json(join(model_training_output_dir, 'dataset.json'))
+        dataset_json = load_json(join(model_training_output_dir, 'dataset.json')) #data_json:
         plans = load_json(join(model_training_output_dir, 'plans.json'))
-        plans_manager = PlansManager(plans)
+        plans_manager = PlansManager(plans) #plans_manager:
 
         if isinstance(use_folds, str):
             use_folds = [use_folds]
@@ -93,7 +93,7 @@ class nnUNetPredictor(object):
 
             parameters.append(checkpoint['network_weights'])
 
-        configuration_manager = plans_manager.get_configuration(configuration_name)
+        configuration_manager = plans_manager.get_configuration(configuration_name) #configuration_manager
         # restore network
         num_input_channels = determine_num_input_channels(plans_manager, configuration_manager, dataset_json)
         trainer_class = recursive_find_python_class(join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),

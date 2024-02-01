@@ -28,7 +28,7 @@ class DeepSupervisionWrapper(nn.Module):
         # we initialize the loss like this instead of 0 to ensure it sits on the correct device, not sure if that's
         # really necessary
         l = weights[0] * self.loss(*[j[0] for j in args])
-        for i, inputs in enumerate(zip(*args)):
+        for i, inputs in enumerate(zip(*args)): #*args:output, target
             if i == 0:
                 continue
             l += weights[i] * self.loss(*inputs)

@@ -139,7 +139,7 @@ class nnUNetTrainer(object):
                 if self.is_cascaded else None
 
         ### Some hyperparameters for you to fiddle with
-        self.initial_lr = 1e-2
+        self.initial_lr = 2e-2
         self.weight_decay = 3e-5
         self.oversample_foreground_percent = 0.33
         self.num_iterations_per_epoch = 250
@@ -267,7 +267,7 @@ class nnUNetTrainer(object):
                                    num_input_channels,
                                    enable_deep_supervision: bool = True) -> nn.Module:
         """
-        his is where you build the architecture according to the plans. There is no obligation to use
+        here is where you build the architecture according to the plans. There is no obligation to use
         get_network_from_plans, this is just a utility we use for the nnU-Net default architectures. You can do what
         you want. Even ignore the plans and just return something static (as long as it can process the requested
         patch size)
@@ -341,7 +341,7 @@ class nnUNetTrainer(object):
             self.oversample_foreground_percent = oversample_percents[my_rank]
 
     def _build_loss(self):
-        if self.label_manager.has_regions:
+        if self.label_manager.has_regions: #False
             loss = DC_and_BCE_loss({},
                                    {'batch_dice': self.configuration_manager.batch_dice,
                                     'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
@@ -362,65 +362,63 @@ class nnUNetTrainer(object):
         # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
         weights = weights / weights.sum()
         # now wrap the loss
-        loss = DeepSupervisionWrapper(loss, weights)
+        loss = DeepSupervisionWrapper(loss, weights) #[0.53333333 0.26666667 0.13333333 0.06666667 0.        ]
         return loss
 
     def configure_rotation_dummyDA_mirroring_and_inital_patch_size(self):
         """
-        This function is stupid and certainly one of the weakest spots of this implementation. Not entirely sure how we can fix it.
+        这个函数的实现有一些问题，可能是这个实现中最薄弱的地方之一。目前还不太清楚如何解决这个问题。
         """
-        patch_size = self.configuration_manager.patch_size
-        dim = len(patch_size)
-        # todo rotation should be defined dynamically based on patch size (more isotropic patch sizes = more rotation)
-        if dim == 2:
-            do_dummy_2d_data_aug = False
-            # todo revisit this parametrization
-            if max(patch_size) / min(patch_size) > 1.5:
-                rotation_for_DA = {
+        patch_size = self.configuration_manager.patch_size  # 从配置管理器获取补丁大小
+        dim = len(patch_size)  # 获取补丁大小的维度 final_size
+
+        # todo: 旋转应该基于补丁大小动态定义（补丁大小更各向同性 = 更多旋转）
+        if dim == 2:  # 如果是二维数据
+            do_dummy_2d_data_aug = False  # 默认不进行二维的虚拟数据增强
+            # todo: 重新审视这个参数化方法
+            if max(patch_size) / min(patch_size) > 1.5:  # 如果长宽比大于1.5
+                rotation_for_DA = {  # 限制x轴的旋转范围
                     'x': (-15. / 360 * 2. * np.pi, 15. / 360 * 2. * np.pi),
                     'y': (0, 0),
                     'z': (0, 0)
                 }
-            else:
-                rotation_for_DA = {
+            else:  # 如果长宽比不大于1.5
+                rotation_for_DA = {  # 允许x轴的全范围旋转
                     'x': (-180. / 360 * 2. * np.pi, 180. / 360 * 2. * np.pi),
                     'y': (0, 0),
                     'z': (0, 0)
                 }
-            mirror_axes = (0, 1)
-        elif dim == 3:
-            # todo this is not ideal. We could also have patch_size (64, 16, 128) in which case a full 180deg 2d rot would be bad
-            # order of the axes is determined by spacing, not image size
-            do_dummy_2d_data_aug = (max(patch_size) / patch_size[0]) > ANISO_THRESHOLD
-            if do_dummy_2d_data_aug:
-                # why do we rotate 180 deg here all the time? We should also restrict it
-                rotation_for_DA = {
+            mirror_axes = (0, 1)  # 设置二维数据的镜像轴
+        elif dim == 3:  # 如果是三维数据
+            # todo: 这不是理想的情况。我们也可能遇到像 (64, 16, 128) 这样的补丁大小，这种情况下全范围的2d旋转会有问题
+            do_dummy_2d_data_aug = (max(patch_size) / patch_size[0]) > ANISO_THRESHOLD  # 根据各向异性阈值判断是否进行虚拟2d数据增强
+            if do_dummy_2d_data_aug:  # 如果进行虚拟2d数据增强
+                rotation_for_DA = {  # 允许x轴的全范围旋转
                     'x': (-180. / 360 * 2. * np.pi, 180. / 360 * 2. * np.pi),
                     'y': (0, 0),
                     'z': (0, 0)
                 }
-            else:
-                rotation_for_DA = {
+            else:  # 如果不进行虚拟2d数据增强
+                rotation_for_DA = {  # 设置三个轴的旋转范围
                     'x': (-30. / 360 * 2. * np.pi, 30. / 360 * 2. * np.pi),
                     'y': (-30. / 360 * 2. * np.pi, 30. / 360 * 2. * np.pi),
                     'z': (-30. / 360 * 2. * np.pi, 30. / 360 * 2. * np.pi),
                 }
-            mirror_axes = (0, 1, 2)
+            mirror_axes = (0, 1, 2)  # 设置三维数据的镜像轴
         else:
-            raise RuntimeError()
+            raise RuntimeError()  # 如果既不是二维也不是三维数据，则抛出异常
 
-        # todo this function is stupid. It doesn't even use the correct scale range (we keep things as they were in the
-        #  old nnunet for now)
-        initial_patch_size = get_patch_size(patch_size[-dim:],
+        # todo: 这个函数不理想。它甚至没有使用正确的缩放范围（目前我们保持旧 nnunet 的设置）
+        initial_patch_size = get_patch_size(patch_size[-dim:],  # 计算考虑旋转后的初始补丁大小
                                             *rotation_for_DA.values(),
                                             (0.85, 1.25))
-        if do_dummy_2d_data_aug:
-            initial_patch_size[0] = patch_size[0]
+        if do_dummy_2d_data_aug:  # 如果进行虚拟2d数据增强
+            initial_patch_size[0] = patch_size[0]  # 保持第一个维度的补丁大小不变
 
-        self.print_to_log_file(f'do_dummy_2d_data_aug: {do_dummy_2d_data_aug}')
-        self.inference_allowed_mirroring_axes = mirror_axes
+        self.print_to_log_file(f'do_dummy_2d_data_aug: {do_dummy_2d_data_aug}')  # 记录是否进行了虚拟2d数据增强
+        self.inference_allowed_mirroring_axes = mirror_axes  # 设置允许镜像的轴
 
-        return rotation_for_DA, do_dummy_2d_data_aug, initial_patch_size, mirror_axes
+        return rotation_for_DA, do_dummy_2d_data_aug, initial_patch_size, mirror_axes  # 返回旋转参数、是否进行虚拟2d数据增强、初始补丁大小和镜像轴
 
     def print_to_log_file(self, *args, also_print_to_console=True, add_timestamp=True):
         if self.local_rank == 0:
@@ -649,7 +647,7 @@ class nnUNetTrainer(object):
                                        self.configuration_manager.patch_size,
                                        self.label_manager,
                                        oversample_foreground_percent=self.oversample_foreground_percent,
-                                       sampling_probabilities=None, pad_sides=None)
+                                       sampling_probabilities=None, pad_sides=None) #initial_patch_size (208,238,196)
             dl_val = nnUNetDataLoader3D(dataset_val, self.batch_size,
                                         self.configuration_manager.patch_size,
                                         self.configuration_manager.patch_size,

@@ -32,20 +32,20 @@ class ExperimentPlanner(object):
         also be affected
         """
 
-        self.dataset_name = maybe_convert_to_dataset_name(dataset_name_or_id)
-        self.suppress_transpose = suppress_transpose
-        self.raw_dataset_folder = join(nnUNet_raw, self.dataset_name)
+        self.dataset_name = maybe_convert_to_dataset_name(dataset_name_or_id) #Dataset27_Aorta
+        self.suppress_transpose = suppress_transpose #False
+        self.raw_dataset_folder = join(nnUNet_raw, self.dataset_name) #数据集路径
         preprocessed_folder = join(nnUNet_preprocessed, self.dataset_name)
         self.dataset_json = load_json(join(self.raw_dataset_folder, 'dataset.json'))
         self.dataset = get_filenames_of_train_images_and_targets(self.raw_dataset_folder, self.dataset_json)
-
+        # self.dataset:所有文件如下{'images': ['/home/yiwen/guidedresearch/nnUNet/nnUNet_raw/Dataset027_Aorta/imagesTr/arota_003_0000.nii.gz'], 'label': '/home/yiwen/guidedresearch/nnUNet/nnUNet_raw/Dataset027_Aorta/labelsTr/arota_003.nii.gz'}
         # load dataset fingerprint
         if not isfile(join(preprocessed_folder, 'dataset_fingerprint.json')):
             raise RuntimeError('Fingerprint missing for this dataset. Please run nnUNet_extract_dataset_fingerprint')
 
         self.dataset_fingerprint = load_json(join(preprocessed_folder, 'dataset_fingerprint.json'))
 
-        self.anisotropy_threshold = ANISO_THRESHOLD
+        self.anisotropy_threshold = ANISO_THRESHOLD # 3
 
         self.UNet_base_num_features = 32
         self.UNet_class = PlainConvUNet
@@ -381,10 +381,10 @@ class ExperimentPlanner(object):
         """
 
         # first get transpose
-        transpose_forward, transpose_backward = self.determine_transpose()
+        transpose_forward, transpose_backward = self.determine_transpose() # transpose_forward: [0,1,2]
 
         # get fullres spacing and transpose it
-        fullres_spacing = self.determine_fullres_target_spacing()
+        fullres_spacing = self.determine_fullres_target_spacing() #求spacing的均值
         fullres_spacing_transposed = fullres_spacing[transpose_forward]
 
         # get transposed new median shape (what we would have after resampling)

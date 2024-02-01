@@ -78,8 +78,8 @@ def plan_experiments(dataset_ids: List[int], experiment_planner_class_name: str 
     """
     experiment_planner = recursive_find_python_class(join(nnunetv2.__path__[0], "experiment_planning"),
                                                      experiment_planner_class_name,
-                                                     current_module="nnunetv2.experiment_planning")
-    for d in dataset_ids:
+                                                     current_module="nnunetv2.experiment_planning") #找到ExperimentPlaner这个类的名称
+    for d in dataset_ids: # id：27 指定编号
         plan_experiment_dataset(d, experiment_planner, gpu_memory_target_in_gb, preprocess_class_name,
                                 overwrite_target_spacing, overwrite_plans_name)
 
@@ -87,7 +87,7 @@ def plan_experiments(dataset_ids: List[int], experiment_planner_class_name: str 
 def preprocess_dataset(dataset_id: int,
                        plans_identifier: str = 'nnUNetPlans',
                        configurations: Union[Tuple[str], List[str]] = ('2d', '3d_fullres', '3d_lowres'),
-                       num_processes: Union[int, Tuple[int, ...], List[int]] = (8, 4, 8),
+                       num_processes: Union[int, Tuple[int, ...], List[int]] = (8, 4, 8), #num_process [8,4,8]
                        verbose: bool = False) -> None:
     if not isinstance(num_processes, list):
         num_processes = list(num_processes)
@@ -105,15 +105,16 @@ def preprocess_dataset(dataset_id: int,
     plans_file = join(nnUNet_preprocessed, dataset_name, plans_identifier + '.json')
     plans_manager = PlansManager(plans_file)
     for n, c in zip(num_processes, configurations):
-        print(f'Configuration: {c}...')
-        if c not in plans_manager.available_configurations:
-            print(
-                f"INFO: Configuration {c} not found in plans file {plans_identifier + '.json'} of "
-                f"dataset {dataset_name}. Skipping.")
-            continue
-        configuration_manager = plans_manager.get_configuration(c)
-        preprocessor = configuration_manager.preprocessor_class(verbose=verbose)
-        preprocessor.run(dataset_id, c, plans_identifier, num_processes=n)
+        if c == '3d_fullres':
+            print(f'Configuration: {c}...')
+            if c not in plans_manager.available_configurations:
+                print(
+                    f"INFO: Configuration {c} not found in plans file {plans_identifier + '.json'} of "
+                    f"dataset {dataset_name}. Skipping.")
+                continue
+            configuration_manager = plans_manager.get_configuration(c)
+            preprocessor = configuration_manager.preprocessor_class(verbose=verbose)
+            preprocessor.run(dataset_id, c, plans_identifier, num_processes=n) #去preocess的实际过程
 
     # copy the gt to a folder in the nnUNet_preprocessed so that we can do validation even if the raw data is no
     # longer there (useful for compute cluster where only the preprocessed data is available)
