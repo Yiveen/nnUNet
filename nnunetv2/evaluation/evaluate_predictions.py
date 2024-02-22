@@ -14,7 +14,7 @@ from nnunetv2.imageio.reader_writer_registry import determine_reader_writer_from
 from nnunetv2.imageio.simpleitk_reader_writer import SimpleITKIO
 # the Evaluator class of the previous nnU-Net was great and all but man was it overengineered. Keep it simple
 from nnunetv2.utilities.json_export import recursive_fix_for_json_export
-from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
+from nnunetv2.utilities.plans_handling.plans_handler import PlansManager, ConfigurationManager
 
 
 def label_or_region_to_key(label_or_region: Union[int, Tuple[int]]):
@@ -41,10 +41,25 @@ def save_summary_json(results: dict, output_file: str):
     results_converted['mean'] = {label_or_region_to_key(k): results['mean'][k] for k in results['mean'].keys()}
     # convert metric_per_case
     for i in range(len(results_converted["metric_per_case"])):
-        results_converted["metric_per_case"][i]['metrics'] = \
-            {label_or_region_to_key(k): results["metric_per_case"][i]['metrics'][k]
-             for k in results["metric_per_case"][i]['metrics'].keys()}
+        for k in results["metric_per_case"][i].keys():
+            if 'total_distance' in k:
+                results_converted["metric_per_case"][i]['total_distance'] = {results["metric_per_case"][i]['total_distance']}
+            else:
+                results_converted["metric_per_case"][i]['metrics'] = \
+                    {label_or_region_to_key(k): results["metric_per_case"][i]['metrics'][k]
+                     for k in results["metric_per_case"][i]['metrics'].keys()}
     # sort_keys=True will make foreground_mean the first entry and thus easy to spot
+    def convert_sets_to_lists(obj):
+        if isinstance(obj, set):
+            return list(obj)
+        elif isinstance(obj, dict):
+            return {k: convert_sets_to_lists(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_sets_to_lists(x) for x in obj]
+        else:
+            return obj
+
+    results_converted = convert_sets_to_lists(results_converted)
     save_json(results_converted, output_file, sort_keys=True)
 
 
@@ -88,48 +103,120 @@ def compute_tp_fp_fn_tn(mask_ref: np.ndarray, mask_pred: np.ndarray, ignore_mask
 
 def compute_metrics(reference_file: str, prediction_file: str, image_reader_writer: BaseReaderWriter,
                     labels_or_regions: Union[List[int], List[Union[int, Tuple[int, ...]]]],
-                    ignore_label: int = None) -> dict:
+                    ignore_label: Optional[int] = None, key_name: str = None, biases: list = None) -> dict:
+    path_parts = reference_file.split('/')
+    # 找到 "gt_segmentations" 的索引并获取其后的文件名
+    file_stem = os.path.join(*path_parts[:path_parts.index('gt_segmentations')])
+    file_name_with_extension = path_parts[path_parts.index('gt_segmentations') + 1]
+    # 从文件名中移除扩展名
+    file_name, _ = os.path.splitext(file_name_with_extension)
+    if key_name is not None:
+        key_file_path = os.path.join("/" + file_stem, key_name, file_name[:-4] + "_key.npz")
+
     # load images
     seg_ref, seg_ref_dict = image_reader_writer.read_seg(reference_file)
-    seg_pred, seg_pred_dict = image_reader_writer.read_seg(prediction_file)
-    # spacing = seg_ref_dict['spacing']
-
-    ignore_mask = seg_ref == ignore_label if ignore_label is not None else None
+    key_pred = None
+    seg_pred = None
+    if 'key' in prediction_file:
+        key_pred, key_pred_dict = image_reader_writer.read_seg(prediction_file)
+        key_ref = np.load(key_file_path)['key']
+    else:
+        seg_pred, seg_pred_dict = image_reader_writer.read_seg(prediction_file)
 
     results = {}
-    results['reference_file'] = reference_file
-    results['prediction_file'] = prediction_file
-    results['metrics'] = {}
-    for r in labels_or_regions:
-        results['metrics'][r] = {}
-        mask_ref = region_or_label_to_mask(seg_ref, r)
-        mask_pred = region_or_label_to_mask(seg_pred, r)
-        tp, fp, fn, tn = compute_tp_fp_fn_tn(mask_ref, mask_pred, ignore_mask)
-        if tp + fp + fn == 0:
-            results['metrics'][r]['Dice'] = np.nan
-            results['metrics'][r]['IoU'] = np.nan
+
+    # spacing = seg_ref_dict['spacing']
+    if seg_pred is not None:
+
+        ignore_mask = seg_ref == ignore_label if ignore_label is not None else None
+        results['reference_file'] = reference_file
+        results['prediction_file'] = prediction_file
+        results['metrics'] = {}
+        for r in labels_or_regions:
+            results['metrics'][r] = {}
+            mask_ref = region_or_label_to_mask(seg_ref, r)
+            mask_pred = region_or_label_to_mask(seg_pred, r)
+            tp, fp, fn, tn = compute_tp_fp_fn_tn(mask_ref, mask_pred, ignore_mask)
+            if tp + fp + fn == 0:
+                results['metrics'][r]['Dice'] = np.nan
+                results['metrics'][r]['IoU'] = np.nan
+            else:
+                results['metrics'][r]['Dice'] = 2 * tp / (2 * tp + fp + fn)
+                results['metrics'][r]['IoU'] = tp / (tp + fp + fn)
+            results['metrics'][r]['FP'] = fp
+            results['metrics'][r]['TP'] = tp
+            results['metrics'][r]['FN'] = fn
+            results['metrics'][r]['TN'] = tn
+            results['metrics'][r]['n_pred'] = fp + tp
+            results['metrics'][r]['n_ref'] = fn + tp
+
+    if key_pred is not None:
+        b, c, h, w = key_ref.shape
+        center = np.zeros((b, len(biases), 3), dtype=np.float32)
+        center_predict = np.zeros((b, len(biases), 3), dtype=np.float32)
+
+        total_distance = 0
+
+        for channel_idx in range(b):  # 使用 range(b)
+            kernel = key_ref[channel_idx]
+            output = key_pred[channel_idx]
+
+            for i, bias in enumerate(biases):
+                adjusted_kernel = kernel - bias - 0.7  # hard-coded
+                adjusted_output = output - bias
+
+                mask = (adjusted_kernel > 0) & (adjusted_kernel < 1)  # 不再使用non_zero
+                if not np.any(mask):  # 如果mask全为False，则跳过
+                    continue
+                # 获取满足条件的元素的索引
+                gt_indices = np.array(np.nonzero(mask))
+
+                max_index = np.argmax(adjusted_kernel[mask])
+                peak_coords_abs = gt_indices[:, max_index]
+                center[channel_idx, i, :] = peak_coords_abs
+
+                mask_output = (adjusted_output > 0) & (adjusted_output < 1)  # 不再使用non_zero
+                if not np.any(mask_output):  # 如果mask全为False，则跳过
+                    continue
+                # 获取满足条件的元素的索引
+                gt_indices = np.array(np.nonzero(mask_output))
+
+                max_index_predict = np.argmax(adjusted_output[mask_output])
+                peak_coords_abs_predict = gt_indices[:, max_index_predict]
+                center_predict[channel_idx, i, :] = peak_coords_abs_predict
+        non_zero_mask = np.logical_and(center != 0, center_predict != 0)
+        non_zero_center = center[non_zero_mask]
+        non_zero_center_predict = center_predict[non_zero_mask]
+
+        if non_zero_center.size > 0:
+            total_distance = np.linalg.norm(non_zero_center - non_zero_center_predict, axis=-1)
+            total_distance = np.mean(total_distance)  # 取平均
         else:
-            results['metrics'][r]['Dice'] = 2 * tp / (2 * tp + fp + fn)
-            results['metrics'][r]['IoU'] = tp / (tp + fp + fn)
-        results['metrics'][r]['FP'] = fp
-        results['metrics'][r]['TP'] = tp
-        results['metrics'][r]['FN'] = fn
-        results['metrics'][r]['TN'] = tn
-        results['metrics'][r]['n_pred'] = fp + tp
-        results['metrics'][r]['n_ref'] = fn + tp
+            total_distance = 0.0  # 或者任何适当的默认值
+
+        results['total_distance'] = total_distance
+
     return results
 
 
 def compute_metrics_on_folder(folder_ref: str, folder_pred: str, output_file: str,
                               image_reader_writer: BaseReaderWriter,
                               file_ending: str,
-                              regions_or_labels: Union[List[int], List[Union[int, Tuple[int, ...]]]],
-                              ignore_label: int = None,
+                              regions_or_labels: Union[List[int], List[Union[int, Tuple[int, ...]]]], #1
+                              ignore_label: int = None, #None
                               num_processes: int = default_num_processes,
-                              chill: bool = True) -> dict:
+                              chill: bool = True,
+                              configuration_manager: ConfigurationManager = None,
+                              plans_manager: PlansManager =None) -> dict:
     """
     output_file must end with .json; can be None
     """
+    if plans_manager is not None:
+        biases = plans_manager.plans['biases']
+    if configuration_manager is not None:
+        key_name = configuration_manager.data_identifier
+    else:
+        key_name = None
     if output_file is not None:
         assert output_file.endswith('.json'), 'output_file should end with .json'
     files_pred = subfiles(folder_pred, suffix=file_ending, join=False)
@@ -137,16 +224,21 @@ def compute_metrics_on_folder(folder_ref: str, folder_pred: str, output_file: st
     if not chill:
         present = [isfile(join(folder_pred, i)) for i in files_ref]
         assert all(present), "Not all files in folder_pred exist in folder_ref"
-    files_ref = [join(folder_ref, i) for i in files_pred]
+    files_ref = [join(folder_ref, i) for i in files_pred if i in files_ref]
+    files_ref = [item for item in files_ref for _ in range(2)]
     files_pred = [join(folder_pred, i) for i in files_pred]
     with multiprocessing.get_context("spawn").Pool(num_processes) as pool:
         # for i in list(zip(files_ref, files_pred, [image_reader_writer] * len(files_pred), [regions_or_labels] * len(files_pred), [ignore_label] * len(files_pred))):
         #     compute_metrics(*i)
         results = pool.starmap(
             compute_metrics,
-            list(zip(files_ref, files_pred, [image_reader_writer] * len(files_pred), [regions_or_labels] * len(files_pred),
-                     [ignore_label] * len(files_pred)))
+            list(zip(files_ref, files_pred, [image_reader_writer] * len(files_pred),
+                     [regions_or_labels] * len(files_pred),
+                     [ignore_label] * len(files_pred), [key_name] * len(files_pred), [biases]* len(files_pred)))
         )
+
+    # results = compute_metrics(files_ref[0], files_pred[0], image_reader_writer,regions_or_labels,ignore_label,key_name, biases)
+
 
     # mean metric per class
     metric_list = list(results[0]['metrics'][regions_or_labels[0]].keys())
@@ -154,7 +246,10 @@ def compute_metrics_on_folder(folder_ref: str, folder_pred: str, output_file: st
     for r in regions_or_labels:
         means[r] = {}
         for m in metric_list:
-            means[r][m] = np.nanmean([i['metrics'][r][m] for i in results])
+            means[r][m] = np.nanmean([i['metrics'][r][m] for num, i in enumerate(results) if num / 2 == 0])
+    total_dist = None
+    if 'total_distance' in results[0].keys():
+        total_dist = np.mean(i['total_distance'] for num, i in enumerate(results) if num / 2 == 1)
 
     # foreground mean
     foreground_mean = {}
@@ -169,7 +264,10 @@ def compute_metrics_on_folder(folder_ref: str, folder_pred: str, output_file: st
     [recursive_fix_for_json_export(i) for i in results]
     recursive_fix_for_json_export(means)
     recursive_fix_for_json_export(foreground_mean)
-    result = {'metric_per_case': results, 'mean': means, 'foreground_mean': foreground_mean}
+    if total_dist is not None:
+        result = {'metric_per_case': results, 'mean': means, 'foreground_mean': foreground_mean, 'total_dist': total_dist}
+    else:
+        result = {'metric_per_case': results, 'mean': means, 'foreground_mean': foreground_mean}
     if output_file is not None:
         save_summary_json(result, output_file)
     return result

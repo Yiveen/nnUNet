@@ -474,7 +474,10 @@ class ExperimentPlanner(object):
             'experiment_planner_used': self.__class__.__name__,
             'label_manager': 'LabelManager',
             'foreground_intensity_properties_per_channel': self.dataset_fingerprint[
-                'foreground_intensity_properties_per_channel']
+                'foreground_intensity_properties_per_channel'],
+            'k_size': 36,
+            'sigma': 10,
+            'biases': [1, 2, 3, 4]
         }
 
         if plan_3d_lowres is not None:

@@ -399,3 +399,45 @@ viewer.Execute()
 #
 #
 #
+
+
+
+# b, c, h, w = key.shape
+#             center = np.zeros((b, c, len(self.plans_manager.plans['biases']), 3), dtype=np.float32)
+#             center_predict = np.zeros((b, c, len(self.plans_manager.plans['biases']), 3), dtype=np.float32)
+#
+#             total_distance = 0
+#
+#             for batch_idx in range(b):  # 使用 range(b)
+#                 for channel_idx in range(c):  # 使用 range(c)
+#                     kernel = key[batch_idx][channel_idx]
+#                     output = key_out[batch_idx][channel_idx]
+#                     non_zero = np.where(kernel > 0)
+#
+#                     if non_zero[0].size == 0:  # 如果没有非零元素，跳过当前kernel
+#                         continue
+#
+#                     for i, bias in enumerate(self.plans_manager.plans['biases']):
+#                         adjusted_kernel = kernel - bias - 0.7  # hard-coded
+#                         adjusted_output = output - bias
+#
+#                         mask = (adjusted_kernel > 0) & (adjusted_kernel < 1)  # 不再使用non_zero
+#                         if not np.any(mask):  # 如果mask全为False，则跳过
+#                             continue
+#                         # 获取满足条件的元素的索引
+#                         gt_indices = np.array(np.nonzero(mask))
+#
+#                         max_index = np.argmax(adjusted_kernel[mask])
+#                         peak_coords_abs = gt_indices[:, max_index]
+#                         center[batch_idx, channel_idx, i, :] = peak_coords_abs
+#
+#                         mask_output = (adjusted_output > 0) & (adjusted_output < 1)  # 不再使用non_zero
+#                         if not np.any(mask_output):  # 如果mask全为False，则跳过
+#                             continue
+#                         # 获取满足条件的元素的索引
+#                         gt_indices = np.array(np.nonzero(mask_output))
+#
+#                         max_index_predict = np.argmax(adjusted_output[mask_output])
+#                         peak_coords_abs_predict = gt_indices[:, max_index_predict]
+#                         center_predict[batch_idx, channel_idx, i, :] = peak_coords_abs_predict
+#             total_distance = np.mean(np.linalg.norm(center - center_predict, axis=-1))

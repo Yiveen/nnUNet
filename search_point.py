@@ -5,8 +5,8 @@ def distance(point1, point2):
     return math.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2 + (point1[2] - point2[2])**2)
 
 
-centerlineNode = slicer.util.getNode('Centerline model_4')
-pointListNode = slicer.util.getNode('F_3')
+centerlineNode = slicer.util.getNode('Centerline model_1')
+pointListNode = slicer.util.getNode('F')
 
 centerlinePolyData = centerlineNode.GetPolyData()
 numberOfPoints = centerlinePolyData.GetNumberOfPoints()
@@ -20,7 +20,7 @@ for i in range(numberOfPoints):
 
 final_dict = {}
 ijk_list = []
-name_list = ['ra_left', 'ra_right', 'main_branch', 'lowbranch_left', 'lowbranch_right', 'strat_point', 'AAA_pos']
+name_list = ['ra_left', 'ra_right', 'main_branch', 'lowbranch_left', 'lowbranch_right', 'start_point', 'AAA_pos']
 # 遍历Point List中的所有点
 for i in range(pointListNode.GetNumberOfControlPoints()):
     pointCoordinates = [0.0, 0.0, 0.0]

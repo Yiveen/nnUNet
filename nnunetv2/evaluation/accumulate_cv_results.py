@@ -6,7 +6,7 @@ from batchgenerators.utilities.file_and_folder_operations import load_json, join
 from nnunetv2.configuration import default_num_processes
 from nnunetv2.evaluation.evaluate_predictions import compute_metrics_on_folder
 from nnunetv2.paths import nnUNet_raw, nnUNet_preprocessed
-from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
+from nnunetv2.utilities.plans_handling.plans_handler import PlansManager,ConfigurationManager
 
 
 def accumulate_cv_results(trained_model_folder,
@@ -25,22 +25,24 @@ def accumulate_cv_results(trained_model_folder,
 
     dataset_json = load_json(join(trained_model_folder, 'dataset.json'))
     plans_manager = PlansManager(join(trained_model_folder, 'plans.json'))
+    configuration_manager = plans_manager.get_configuration('3d_fullres') #Hard-code here
     rw = plans_manager.image_reader_writer_class()
     shutil.copy(join(trained_model_folder, 'dataset.json'), join(merged_output_folder, 'dataset.json'))
     shutil.copy(join(trained_model_folder, 'plans.json'), join(merged_output_folder, 'plans.json'))
 
     did_we_copy_something = False
     for f in folds:
-        expected_validation_folder = join(trained_model_folder, f'fold_{f}', 'validation')
+        expected_validation_folder = join(trained_model_folder, f'fold_{f}', 'validation') # fold_i/validation
         if not isdir(expected_validation_folder):
             raise RuntimeError(f"fold {f} of model {trained_model_folder} is missing. Please train it!")
         predicted_files = subfiles(expected_validation_folder, suffix=dataset_json['file_ending'], join=False)
-        for pf in predicted_files:
-            if overwrite and isfile(join(merged_output_folder, pf)):
-                raise RuntimeError(f'More than one of your folds has a prediction for case {pf}')
-            if overwrite or not isfile(join(merged_output_folder, pf)):
-                shutil.copy(join(expected_validation_folder, pf), join(merged_output_folder, pf))
-                did_we_copy_something = True
+        for pf in predicted_files: #TODO: KEY NOT IN
+            if 'key' not in pf:
+                if overwrite and isfile(join(merged_output_folder, pf)):
+                    raise RuntimeError(f'More than one of your folds has a prediction for case {pf}')
+                if overwrite or not isfile(join(merged_output_folder, pf)):
+                    shutil.copy(join(expected_validation_folder, pf), join(merged_output_folder, pf))
+                    did_we_copy_something = True
 
     if did_we_copy_something or not isfile(join(merged_output_folder, 'summary.json')):
         label_manager = plans_manager.get_label_manager(dataset_json)
@@ -55,4 +57,6 @@ def accumulate_cv_results(trained_model_folder,
                                   label_manager.foreground_regions if label_manager.has_regions else
                                   label_manager.foreground_labels,
                                   label_manager.ignore_label,
-                                  num_processes)
+                                  num_processes,
+                                  configuration_manager=configuration_manager,
+                                  plans_manager=plans_manager)

@@ -31,7 +31,7 @@ def get_patch_size(final_patch_size, rot_x, rot_y, rot_z, scale_range):
         final_shape = np.max(np.vstack((np.abs(rotate_coords_2d(coords, rot_x)), final_shape)), 0)
 
     # 考虑缩放范围的最小值（因为我们想要最大可能的补丁大小以覆盖所有情况），并更新最终形状
-    final_shape /= min(scale_range)
+    final_shape /= min(scale_range) #scale_range (0.85, 1.25)
 
     return final_shape.astype(int)  # 将最终形状转换为整数并返回
 

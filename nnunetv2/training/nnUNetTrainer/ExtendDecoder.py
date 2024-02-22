@@ -14,11 +14,14 @@ class ExtendUNetDecoder(UNetDecoder):
                  encoder: Union[PlainConvEncoder, ResidualEncoder],
                  num_classes: int,
                  n_conv_per_stage: Union[int, Tuple[int, ...], List[int]],
-                 deep_supervision, nonlin_first: bool = False, config_key_point: dict = None):
+                 deep_supervision, nonlin_first: bool = False, deep_supervision_key: bool = None):
         super().__init__(encoder, num_classes, n_conv_per_stage, deep_supervision, nonlin_first)
+
+        self.deep_supervision_key = deep_supervision_key
 
         #Here is same as the seg branch decoder
         n_stages_encoder = len(encoder.output_channels)
+        self.n_stages_encoder = n_stages_encoder
         if isinstance(n_conv_per_stage, int):
             n_conv_per_stage = [n_conv_per_stage] * (n_stages_encoder - 1)
         assert len(n_conv_per_stage) == n_stages_encoder - 1, "n_conv_per_stage must have as many entries as we have " \
@@ -29,7 +32,7 @@ class ExtendUNetDecoder(UNetDecoder):
         stages_key = []
         transpconvs_key = []
         attention_key = []
-        seg_layers_key = []
+        final_layers_key = []
         for s in range(1, n_stages_encoder):
             input_features_below = encoder.output_channels[-s]
             input_features_skip = encoder.output_channels[-(s + 1)]
@@ -45,11 +48,13 @@ class ExtendUNetDecoder(UNetDecoder):
                 encoder.dropout_op, encoder.dropout_op_kwargs, encoder.nonlin, encoder.nonlin_kwargs, nonlin_first
             ))
             if s != n_stages_encoder - 1:
-                attention_key.append(AttentionBlock(input_features_skip, input_features_skip, input_features_skip/2))
+                attention_key.append(AttentionBlock(input_features_skip, input_features_skip, int(input_features_skip/2)))
+            final_layers_key.append(encoder.conv_op(input_features_skip, 2, 1, 1, 0, bias=True))#Hard-code here
 
         self.stages_key = nn.ModuleList(stages_key)
         self.transpconvs_key = nn.ModuleList(transpconvs_key)
         self.attention_key = nn.ModuleList(attention_key)
+        self.key_layers = nn.ModuleList(final_layers_key)
     def forward(self, skips):
         """
         we expect to get the skips in the order they were computed, so the bottleneck should be the last entry
@@ -62,30 +67,38 @@ class ExtendUNetDecoder(UNetDecoder):
         key_outputs = []
         for s in range(len(self.stages)):
             x = self.transpconvs[s](lres_input)
-            x_key = self.stages_key[s](lkey_input)
+            x_key = self.transpconvs[s](lkey_input)
 
             x = torch.cat((x, skips[-(s+2)]), 1)
             x_key = torch.cat((x_key, skips[-(s+2)]), 1)
 
             x = self.stages[s](x)
             x_key = self.stages_key[s](x_key)
-            x_key = self.attention_key[s](x, x_key)
+            if s < self.n_stages_encoder - 2:
+                x_key = self.attention_key[s](x, x_key)
+
             if self.deep_supervision:
                 seg_outputs.append(self.seg_layers[s](x))
-                key_outputs.append(x_key)
             elif s == (len(self.stages) - 1):
                 seg_outputs.append(self.seg_layers[-1](x))
-                key_outputs.append(x_key)
+
+            if self.deep_supervision_key:
+                key_outputs.append(self.key_layers[s](x_key))
+            elif s == (len(self.stages) - 1):
+                key_outputs.append(self.key_layers[-1](x_key))
             lres_input = x
             lkey_input = x_key
 
         # invert seg outputs so that the largest segmentation prediction is returned first
         seg_outputs = seg_outputs[::-1]
+        key_outputs = key_outputs[::-1]
 
         if not self.deep_supervision:
             r = seg_outputs[0]
-            k = key_outputs[0]
         else:
             r = seg_outputs
-            k = key_outputs[-1]
+        if not self.deep_supervision_key:
+            k = key_outputs[0] #should be 2 channels
+        else:
+            k = key_outputs
         return r, k

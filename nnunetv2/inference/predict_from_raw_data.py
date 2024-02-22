@@ -33,6 +33,8 @@ from nnunetv2.utilities.label_handling.label_handling import determine_num_input
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager, ConfigurationManager
 from nnunetv2.utilities.utils import create_lists_from_splitted_dataset_folder
 
+TensorTypes = Union[np.ndarray, torch.Tensor]
+ReturnTypes = Union[TensorTypes, Tuple[TensorTypes, TensorTypes]]
 
 class nnUNetPredictor(object):
     def __init__(self,
@@ -43,7 +45,8 @@ class nnUNetPredictor(object):
                  device: torch.device = torch.device('cuda'),
                  verbose: bool = False,
                  verbose_preprocessing: bool = False,
-                 allow_tqdm: bool = True):
+                 allow_tqdm: bool = True,
+                 stage: int = 1):
         self.verbose = verbose
         self.verbose_preprocessing = verbose_preprocessing
         self.allow_tqdm = allow_tqdm
@@ -51,9 +54,9 @@ class nnUNetPredictor(object):
         self.plans_manager, self.configuration_manager, self.list_of_parameters, self.network, self.dataset_json, \
         self.trainer_name, self.allowed_mirroring_axes, self.label_manager = None, None, None, None, None, None, None, None
 
-        self.tile_step_size = tile_step_size
+        self.tile_step_size = tile_step_size #0.5
         self.use_gaussian = use_gaussian
-        self.use_mirroring = use_mirroring
+        self.use_mirroring = False
         if device.type == 'cuda':
             # device = torch.device(type='cuda', index=0)  # set the desired GPU with CUDA_VISIBLE_DEVICES!
             # why would I ever want to do that. Stupid dobby. This kills DDP inference...
@@ -63,10 +66,13 @@ class nnUNetPredictor(object):
             perform_everything_on_gpu = False
         self.device = device
         self.perform_everything_on_gpu = perform_everything_on_gpu
+        self.stage = stage
 
     def initialize_from_trained_model_folder(self, model_training_output_dir: str,
                                              use_folds: Union[Tuple[Union[int, str]], None],
-                                             checkpoint_name: str = 'checkpoint_final.pth'):
+                                             checkpoint_name: str = 'checkpoint_final.pth',
+                                             stage: int = 1,
+                                             deep_supervision_key: bool = None):
         """
         This is used when making predictions with a trained model
         """
@@ -99,7 +105,7 @@ class nnUNetPredictor(object):
         trainer_class = recursive_find_python_class(join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),
                                                     trainer_name, 'nnunetv2.training.nnUNetTrainer')
         network = trainer_class.build_network_architecture(plans_manager, dataset_json, configuration_manager,
-                                                           num_input_channels, enable_deep_supervision=False)
+                                                           num_input_channels, enable_deep_supervision=False, stage=stage, deep_supervision_key=deep_supervision_key)
         self.plans_manager = plans_manager
         self.configuration_manager = configuration_manager
         self.list_of_parameters = parameters
@@ -336,6 +342,8 @@ class nnUNetPredictor(object):
         each element returned by data_iterator must be a dict with 'data', 'ofile' and 'data_properties' keys!
         If 'ofile' is None, the result will be returned instead of written to a file
         """
+
+        #TODO: 目前只是针对没有label的数据做预测，如果我们相对这3个没有label的数据做关键点的预测，这个本身没有办法做指标评估，只能做可视化，对于key的输入需要在这里加上export_prediction_key的入口即可
         with multiprocessing.get_context("spawn").Pool(num_processes_segmentation_export) as export_pool:
             worker_list = [i for i in export_pool._pool]
             r = []
@@ -539,9 +547,13 @@ class nnUNetPredictor(object):
                                                   zip((sx, sy, sz), self.configuration_manager.patch_size)]]))
         return slicers
 
-    def _internal_maybe_mirror_and_predict(self, x: torch.Tensor) -> torch.Tensor:
+    def _internal_maybe_mirror_and_predict(self, x: torch.Tensor) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         mirror_axes = self.allowed_mirroring_axes if self.use_mirroring else None
-        prediction = self.network(x)
+        key_prediction = None
+        if self.stage == 1:
+            prediction = self.network(x)
+        else:
+            prediction, key_prediction = self.network(x)
 
         if mirror_axes is not None:
             # check for invalid numbers in mirror_axes
@@ -564,10 +576,13 @@ class nnUNetPredictor(object):
             if 0 in mirror_axes and 1 in mirror_axes and 2 in mirror_axes:
                 prediction += torch.flip(self.network(torch.flip(x, (2, 3, 4))), (2, 3, 4))
             prediction /= num_predictons
-        return prediction
+        if self.stage == 1:
+            return prediction
+        else:
+            return prediction, key_prediction
 
     def predict_sliding_window_return_logits(self, input_image: torch.Tensor) \
-            -> Union[np.ndarray, torch.Tensor]:
+            -> Union[Union[np.ndarray, torch.Tensor], Tuple[Union[np.ndarray, torch.Tensor], Union[np.ndarray, torch.Tensor]]]:
         assert isinstance(input_image, torch.Tensor)
         self.network = self.network.to(self.device)
         self.network.eval()
@@ -600,11 +615,15 @@ class nnUNetPredictor(object):
                 if self.verbose: print('preallocating arrays')
                 try:
                     data = data.to(self.device)
-                    predicted_logits = torch.zeros((self.label_manager.num_segmentation_heads, *data.shape[1:]),
+                    predicted_logits = torch.zeros((self.label_manager.num_segmentation_heads, *data.shape[1:]), #(2,298,385,385)
                                                    dtype=torch.half,
                                                    device=results_device)
                     n_predictions = torch.zeros(data.shape[1:], dtype=torch.half,
-                                                device=results_device)
+                                                device=results_device) #(298,385,385)
+
+                    predicted_keys = torch.zeros((2, *data.shape[1:]), #hard-code here
+                                                   dtype=torch.half,
+                                                   device=results_device)
                     if self.use_gaussian:
                         gaussian = compute_gaussian(tuple(self.configuration_manager.patch_size), sigma_scale=1. / 8,
                                                     value_scaling_factor=1000,
@@ -627,18 +646,29 @@ class nnUNetPredictor(object):
 
                 if self.verbose: print('running prediction')
                 for sl in tqdm(slicers, disable=not self.allow_tqdm):
-                    workon = data[sl][None]
+                    workon = data[sl][None]  #即在原有的一维数组前面增加了一个新的轴 在 NumPy 中，None 用于此目的与使用 np.newaxis 相同。这通常用于增加数组的维数，使得一维数组变成二维的行向量或列向量，或者在更高维的数组中添加更多维度
                     workon = workon.to(self.device, non_blocking=False)
 
-                    prediction = self._internal_maybe_mirror_and_predict(workon)[0].to(results_device)
-
+                    if self.stage == 1:
+                        prediction = self._internal_maybe_mirror_and_predict(workon)[0].to(results_device)
+                    else:
+                        prediction, prediction_key = self._internal_maybe_mirror_and_predict(workon)
+                        prediction = prediction[0].to(results_device)
+                        prediction_key = prediction_key[0].to(results_device)
+                    predicted_keys[sl] += (prediction_key * gaussian if self.use_gaussian else prediction_key)
                     predicted_logits[sl] += (prediction * gaussian if self.use_gaussian else prediction)
                     n_predictions[sl[1:]] += (gaussian if self.use_gaussian else 1)
 
-                predicted_logits /= n_predictions
+                if self.stage == 1:
+                    predicted_logits /= n_predictions
+                else:
+                    predicted_logits /= n_predictions
+                    predicted_keys /= n_predictions
         empty_cache(self.device)
-        return predicted_logits[tuple([slice(None), *slicer_revert_padding[1:]])]
-
+        if self.stage == 1:
+            return predicted_logits[tuple([slice(None), *slicer_revert_padding[1:]])]
+        else:
+            return predicted_logits[tuple([slice(None), *slicer_revert_padding[1:]])], predicted_keys[tuple([slice(None), *slicer_revert_padding[1:]])]
 
 def predict_entry_point_modelfolder():
     import argparse
@@ -685,6 +715,8 @@ def predict_entry_point_modelfolder():
                         help="Use this to set the device the inference should run with. Available options are 'cuda' "
                              "(GPU), 'cpu' (CPU) and 'mps' (Apple M1/M2). Do NOT use this to set which GPU ID! "
                              "Use CUDA_VISIBLE_DEVICES=X nnUNetv2_predict [...] instead!")
+    parser.add_argument('-stage', type=int, default=1, required=False,
+                        help="Inference model stage")
 
     print(
         "\n#######################################################################\nPlease cite the following paper "
@@ -719,7 +751,8 @@ def predict_entry_point_modelfolder():
                                 use_mirroring=not args.disable_tta,
                                 perform_everything_on_gpu=True,
                                 device=device,
-                                verbose=args.verbose)
+                                verbose=args.verbose,
+                                stage=args.stage)
     predictor.initialize_from_trained_model_folder(args.m, args.f, args.chk)
     predictor.predict_from_files(args.i, args.o, save_probabilities=args.save_probabilities,
                                  overwrite=not args.continue_prediction,
@@ -789,6 +822,8 @@ def predict_entry_point():
                         help="Use this to set the device the inference should run with. Available options are 'cuda' "
                              "(GPU), 'cpu' (CPU) and 'mps' (Apple M1/M2). Do NOT use this to set which GPU ID! "
                              "Use CUDA_VISIBLE_DEVICES=X nnUNetv2_predict [...] instead!")
+    parser.add_argument('-stage', type=int, default=1, required=False,
+                        help="Inference model stage")
 
     print(
         "\n#######################################################################\nPlease cite the following paper "
@@ -829,11 +864,13 @@ def predict_entry_point():
                                 perform_everything_on_gpu=True,
                                 device=device,
                                 verbose=args.verbose,
-                                verbose_preprocessing=False)
+                                verbose_preprocessing=False,
+                                stage=args.stage)
     predictor.initialize_from_trained_model_folder(
         model_folder,
         args.f,
-        checkpoint_name=args.chk
+        checkpoint_name=args.chk,
+        stage=args.stage
     )
     predictor.predict_from_files(args.i, args.o, save_probabilities=args.save_probabilities,
                                  overwrite=not args.continue_prediction,
@@ -863,36 +900,37 @@ def predict_entry_point():
 
 
 if __name__ == '__main__':
-    # predict a bunch of files
-    from nnunetv2.paths import nnUNet_results, nnUNet_raw
-    predictor = nnUNetPredictor(
-        tile_step_size=0.5,
-        use_gaussian=True,
-        use_mirroring=True,
-        perform_everything_on_gpu=True,
-        device=torch.device('cuda', 0),
-        verbose=False,
-        verbose_preprocessing=False,
-        allow_tqdm=True
-        )
-    predictor.initialize_from_trained_model_folder(
-        join(nnUNet_results, 'Dataset003_Liver/nnUNetTrainer__nnUNetPlans__3d_lowres'),
-        use_folds=(0, ),
-        checkpoint_name='checkpoint_final.pth',
-    )
-    predictor.predict_from_files(join(nnUNet_raw, 'Dataset003_Liver/imagesTs'),
-                                 join(nnUNet_raw, 'Dataset003_Liver/imagesTs_predlowres'),
-                                 save_probabilities=False, overwrite=False,
-                                 num_processes_preprocessing=2, num_processes_segmentation_export=2,
-                                 folder_with_segs_from_prev_stage=None, num_parts=1, part_id=0)
-
-    # predict a numpy array
-    from nnunetv2.imageio.simpleitk_reader_writer import SimpleITKIO
-    img, props = SimpleITKIO().read_images([join(nnUNet_raw, 'Dataset003_Liver/imagesTr/liver_63_0000.nii.gz')])
-    ret = predictor.predict_single_npy_array(img, props, None, None, False)
-
-    iterator = predictor.get_data_iterator_from_raw_npy_data([img], None, [props], None, 1)
-    ret = predictor.predict_from_data_iterator(iterator, False, 1)
+    predict_entry_point()
+    # # predict a bunch of files
+    # from nnunetv2.paths import nnUNet_results, nnUNet_raw
+    # predictor = nnUNetPredictor(
+    #     tile_step_size=0.5,
+    #     use_gaussian=True,
+    #     use_mirroring=True,
+    #     perform_everything_on_gpu=True,
+    #     device=torch.device('cuda', 0),
+    #     verbose=False,
+    #     verbose_preprocessing=False,
+    #     allow_tqdm=True
+    #     )
+    # predictor.initialize_from_trained_model_folder(
+    #     join(nnUNet_results, 'Dataset003_Liver/nnUNetTrainer__nnUNetPlans__3d_lowres'),
+    #     use_folds=(0, ),
+    #     checkpoint_name='checkpoint_final.pth',
+    # )
+    # predictor.predict_from_files(join(nnUNet_raw, 'Dataset003_Liver/imagesTs'),
+    #                              join(nnUNet_raw, 'Dataset003_Liver/imagesTs_predlowres'),
+    #                              save_probabilities=False, overwrite=False,
+    #                              num_processes_preprocessing=2, num_processes_segmentation_export=2,
+    #                              folder_with_segs_from_prev_stage=None, num_parts=1, part_id=0)
+    #
+    # # predict a numpy array
+    # from nnunetv2.imageio.simpleitk_reader_writer import SimpleITKIO
+    # img, props = SimpleITKIO().read_images([join(nnUNet_raw, 'Dataset003_Liver/imagesTr/liver_63_0000.nii.gz')])
+    # ret = predictor.predict_single_npy_array(img, props, None, None, False)
+    #
+    # iterator = predictor.get_data_iterator_from_raw_npy_data([img], None, [props], None, 1)
+    # ret = predictor.predict_from_data_iterator(iterator, False, 1)
 
 
     # predictor = nnUNetPredictor(

@@ -30,6 +30,10 @@ from nnunetv2.utilities.utils import get_identifiers_from_splitted_dataset_folde
 from tqdm import tqdm
 
 
+from scipy import mgrid, exp, square, pi, dot
+from numpy import zeros, ravel, uint8
+
+
 class DefaultPreprocessor(object):
     def __init__(self, verbose: bool = True):
         self.verbose = verbose
@@ -112,7 +116,35 @@ class DefaultPreprocessor(object):
             seg = seg.astype(np.int8)
         return data, seg
 
-    def run_case(self, image_files: List[str], seg_file: Union[str, None], plans_manager: PlansManager,
+    def run_case_original(self, image_files: List[str], seg_file: Union[str, None], plans_manager: PlansManager,
+                 configuration_manager: ConfigurationManager,
+                 dataset_json: Union[dict, str]):
+        """
+        seg file can be none (test cases)
+
+        order of operations is: transpose -> crop -> resample
+        so when we export we need to run the following order: resample -> crop -> transpose (we could also run
+        transpose at a different place, but reverting the order of operations done during preprocessing seems cleaner)
+        """
+        if isinstance(dataset_json, str):
+            dataset_json = load_json(dataset_json)
+
+        rw = plans_manager.image_reader_writer_class()
+
+        # load image(s)
+        data, data_properties = rw.read_images(image_files)
+
+        # if possible, load seg
+        if seg_file is not None:
+            seg, _ = rw.read_seg(seg_file)
+        else:
+            seg = None
+
+        data, seg = self.run_case_npy(data, seg, data_properties, plans_manager, configuration_manager,
+                                      dataset_json)
+        return data, seg, data_properties
+
+    def run_case(self, image_files: List[str], seg_file: Union[str, None], key_file: Union[str, None], plans_manager: PlansManager,
                  configuration_manager: ConfigurationManager,
                  dataset_json: Union[dict, str]):
         """
@@ -129,7 +161,6 @@ class DefaultPreprocessor(object):
 
         # load image(s)
         data, data_properties = rw.read_images(image_files) #在内部处理中会vstack一下，然后会产生一个新的维度。data [1, 326,512,512] data_properties就是simpleitk的属性
-
         # if possible, load seg
         if seg_file is not None:
             seg, _ = rw.read_seg(seg_file) #seg文件的大小
@@ -138,16 +169,50 @@ class DefaultPreprocessor(object):
 
         data, seg = self.run_case_npy(data, seg, data_properties, plans_manager, configuration_manager,
                                       dataset_json)
-        return data, seg, data_properties
+        if configuration_manager.data_identifier == 'nnUNetPlans_3d_fullres' and key_file is not None:
+            with open(key_file, 'r') as key_file_path:
+                key_json = json.load(key_file_path)
+            key_points_ras = np.array(key_json['ras_points'])
+            direction_matrix = np.array(key_json['IJKtoRASDirectionMatrix'])
+            origin = np.array(key_json['ImageOrigin'])
 
-    def run_case_save(self, output_filename_truncated: str, image_files: List[str], seg_file: str,
+            key_points_ras_zyx = key_points_ras[:, [2, 1, 0]]
+
+            direction_diag = np.diag(direction_matrix)
+            direction_diag_zyx = direction_diag[[2, 1, 0]]
+            direction_matrix_zyx = np.diag(direction_diag_zyx)
+            origin_zyx = origin[[2, 1, 0]]
+            target_spacing = configuration_manager.spacing
+
+            key_points = self.transform_points(key_points_ras_zyx, target_spacing, origin_zyx, direction_matrix_zyx)
+            k_size = plans_manager.plans['k_size']
+            sigma = plans_manager.plans['sigma']
+            biases = plans_manager.plans['biases']
+
+            volume1 = np.zeros(data.shape)
+            key = self.apply_gaussian_to_keypoints(volume1, key_points, k_size, sigma, biases) #选取特定元素
+            category_k = self.apply_category_to_keypoints(volume1, key_points, k_size, sigma, biases)
+            # volume2 = np.zeros(data.shape)
+            # key2 = self.apply_gaussian_to_keypoints(volume2, key_points[[1,4,5],:], k_size, sigma, biases)
+            # key = np.concatenate((key1, key2), axis=0)
+        else:
+            key = None
+
+        return data, seg, data_properties, key, category_k
+
+    def run_case_save(self, output_filename_truncated: str, image_files: List[str], seg_file: str, key_file:str,
                       plans_manager: PlansManager, configuration_manager: ConfigurationManager,
                       dataset_json: Union[dict, str]):
-        data, seg, properties = self.run_case(image_files, seg_file, plans_manager, configuration_manager, dataset_json)
+        print('now process', output_filename_truncated)
+        # if output_filename_truncated == '/home/yiwen/guidedresearch/nnUNet/nnUNet_preprocessed/Dataset027_Aorta/nnUNetPlans_3d_fullres/arota_012':
+        data, seg, properties, key, category_k = self.run_case(image_files, seg_file, key_file, plans_manager, configuration_manager, dataset_json)
         # print('dtypes', data.dtype, seg.dtype)
         #TODO:在experiment里面规划key file的路径存储，然后在这里读取，转换成目标大小，然后生成高斯核
         # 还需要check怎么样分成patch
+        print('now save', output_filename_truncated)
         np.savez_compressed(output_filename_truncated + '.npz', data=data, seg=seg)
+        np.savez_compressed(output_filename_truncated + '_key.npz', key=key)
+        np.savez_compressed(output_filename_truncated + '_categoryk.npz', key=category_k)
         write_pickle(properties, output_filename_truncated + '.pkl')
 
     @staticmethod
@@ -234,7 +299,7 @@ class DefaultPreprocessor(object):
         with multiprocessing.get_context("spawn").Pool(num_processes) as p:
             for k in dataset.keys():
                 r.append(p.starmap_async(self.run_case_save,
-                                         ((join(output_directory, k), dataset[k]['images'], dataset[k]['label'],
+                                         ((join(output_directory, k), dataset[k]['images'], dataset[k]['label'], dataset[k]['key'],
                                            plans_manager, configuration_manager,
                                            dataset_json),)))
             remaining = list(range(len(dataset)))
@@ -264,6 +329,158 @@ class DefaultPreprocessor(object):
         # after resampling. Useful for experimenting with sparse annotations: I can introduce sparsity after resampling
         # and don't have to create a new dataset each time I modify my experiments
         return seg
+
+    def gen_gaussian_kernel_3d(self, k_size, sigma, bias):
+        center = k_size // 2
+        x, y, z = mgrid[0 - center:k_size - center, 0 - center:k_size - center, 0 - center:k_size - center]
+        g = 50 / (2 * pi * sigma) * exp(-(square(x) + square(y) + square(z)) / (2 * square(sigma))) + bias
+        return g
+
+    def gen_category_kernel_3d(self, k_size, sigma, bias):
+        category_kernel = np.ones((k_size, k_size, k_size), dtype=np.int16)
+        return category_kernel
+
+    def transform_points(self, points: np.ndarray, spacing: np.ndarray, origin: np.ndarray, direction_matrix: np.ndarray):
+        scale_matrix = np.diag(spacing)
+        transform_matrix = np.dot(direction_matrix, scale_matrix)
+        ijk_points = []
+        for point in points:
+            ijk_point = np.dot(np.linalg.inv(transform_matrix),
+                               np.array(point) - np.array(origin))
+            ijk_points.append(ijk_point)
+        return np.array(ijk_points)
+
+    def apply_category_to_keypoints(self, volume, keypoints, k_size, sigma, biases):
+        """
+        在3D体数据中的特定关键点位置上应用高斯核。
+
+        :param volume: 3D numpy array, 输入的体数据。
+        :param keypoints: List of tuples, 关键点的坐标列表，每个元组表示一个点的(z, y, x)坐标。
+        :param k_size: int, 高斯核的大小。
+        :param sigma: float, 高斯核的标准差。
+        """
+        # 生成高斯核
+        # gaussian_kernel = self.gen_gaussian_kernel_3d(k_size, sigma, biases)
+        kernel_center = k_size // 2
+
+        for point, bias in zip(keypoints, biases):
+            gaussian_kernel = self.gen_category_kernel_3d(k_size, sigma, bias)  # 生成带有bias的高斯核
+
+            z, y, x = point
+            z = self.int_number(z)
+            y = self.int_number(y)
+            x = self.int_number(x)
+
+
+            # 计算高斯核应用区域的边界，确保不超出体数据范围
+            z_min, z_max = max(0, z - kernel_center), min(volume.shape[1], z + kernel_center)
+            y_min, y_max = max(0, y - kernel_center), min(volume.shape[2], y + kernel_center)
+            x_min, x_max = max(0, x - kernel_center), min(volume.shape[3], x + kernel_center)
+
+            # 应用高斯核，同时更新最大值数组
+            # 计算当前高斯核在体数据中的位置
+            kernel_slice = gaussian_kernel[
+                           kernel_center - (z - z_min):kernel_center + (z_max - z),
+                           kernel_center - (y - y_min):kernel_center + (y_max - y),
+                           kernel_center - (x - x_min):kernel_center + (x_max - x)
+                           ]
+
+            # 更新体数据：仅当高斯核的值大于体数据中的值时才更新
+            volume[0, z_min:z_max, y_min:y_max, x_min:x_max] = np.maximum(
+                volume[0, z_min:z_max, y_min:y_max, x_min:x_max], kernel_slice
+            )
+        return volume
+
+
+    def apply_gaussian_to_keypoints(self, volume, keypoints, k_size, sigma, biases):
+        """
+        在3D体数据中的特定关键点位置上应用高斯核。
+
+        :param volume: 3D numpy array, 输入的体数据。
+        :param keypoints: List of tuples, 关键点的坐标列表，每个元组表示一个点的(z, y, x)坐标。
+        :param k_size: int, 高斯核的大小。
+        :param sigma: float, 高斯核的标准差。
+        """
+        # 生成高斯核
+        # gaussian_kernel = self.gen_gaussian_kernel_3d(k_size, sigma, biases)
+        kernel_center = k_size // 2
+        overlap_count = np.zeros_like(volume, dtype=np.float32)  # 用于记录每个体素的高斯核重叠次数
+
+        # # 遍历所有关键点
+        # for z, x, y in keypoints:
+        #     # 计算高斯核应用区域的边界
+        #     z_min, z_max = max(0, z - kernel_center), min(volume.shape[1], z + kernel_center + 1)
+        #     y_min, y_max = max(0, y - kernel_center), min(volume.shape[2], y + kernel_center + 1)
+        #     x_min, x_max = max(0, x - kernel_center), min(volume.shape[3], x + kernel_center + 1)
+        #
+        #     # 计算高斯核在体数据中的对应区域,在计算左下和右上角的坐标
+        #     # 在体数据上叠加高斯核，重叠区域取最大值
+        #     volume[z_min:z_max, y_min:y_max, x_min:x_max] = np.maximum(
+        #         volume[z_min:z_max, y_min:y_max, x_min:x_max],
+        #         gaussian_kernel[
+        #         kernel_center - (z - z_min):kernel_center + (z_max - z),
+        #         kernel_center - (y - y_min):kernel_center + (y_max - y),
+        #         kernel_center - (x - x_min):kernel_center + (x_max - x)
+        #         ]
+        #     )
+
+        for point, bias in zip(keypoints, biases):
+            gaussian_kernel = self.gen_gaussian_kernel_3d(k_size, sigma, bias)  # 生成带有bias的高斯核
+
+            z, y, x = point
+            z = self.int_number(z)
+            y = self.int_number(y)
+            x = self.int_number(x)
+
+
+            # 计算高斯核应用区域的边界，确保不超出体数据范围
+            z_min, z_max = max(0, z - kernel_center), min(volume.shape[1], z + kernel_center)
+            y_min, y_max = max(0, y - kernel_center), min(volume.shape[2], y + kernel_center)
+            x_min, x_max = max(0, x - kernel_center), min(volume.shape[3], x + kernel_center)
+
+            # 应用高斯核，同时更新最大值数组
+            # 计算当前高斯核在体数据中的位置
+            kernel_slice = gaussian_kernel[
+                           kernel_center - (z - z_min):kernel_center + (z_max - z),
+                           kernel_center - (y - y_min):kernel_center + (y_max - y),
+                           kernel_center - (x - x_min):kernel_center + (x_max - x)
+                           ]
+
+            # 更新体数据：仅当高斯核的值大于体数据中的值时才更新
+            volume[0, z_min:z_max, y_min:y_max, x_min:x_max] = np.maximum(
+                volume[0, z_min:z_max, y_min:y_max, x_min:x_max], kernel_slice
+            )
+
+            # # 计算高斯核的切片索引
+            # z_kernel_min = max(kernel_center - (z - z_min), 0)
+            # z_kernel_max = min(kernel_center + (z_max - z), gaussian_kernel.shape[0])
+            # x_kernel_min = max(kernel_center - (x - x_min), 0)
+            # x_kernel_max = min(kernel_center + (x_max - x), gaussian_kernel.shape[1])
+            # y_kernel_min = max(kernel_center - (y - y_min), 0)
+            # y_kernel_max = min(kernel_center + (y_max - y), gaussian_kernel.shape[2])
+            #
+            # # 更新体数据和重叠计数
+            # volume[0, z_min:z_max, x_min:x_max, y_min:y_max] += gaussian_kernel[
+            #                                                     z_kernel_min:z_kernel_max,
+            #                                                     x_kernel_min:x_kernel_max,
+            #                                                     y_kernel_min:y_kernel_max
+            #                                                     ]
+            # overlap_count[0, z_min:z_max, x_min:x_max, y_min:y_max] += 1
+
+            # 更新体数据和重叠计数
+            # volume[0, z_min:z_max, y_min:y_max, x_min:x_max] += gaussian_kernel[
+            #                                                     kernel_center - (z - z_min):kernel_center + (z_max - z),
+            #                                                     kernel_center - (y - y_min):kernel_center + (y_max - y),
+            #                                                     kernel_center - (x - x_min):kernel_center + (x_max - x)
+            #                                                     ]
+            # overlap_count[0, z_min:z_max, y_min:y_max, x_min:x_max] += 1
+
+            # 处理重叠区域：取平均值
+        # volume /= np.maximum(overlap_count, 1)  # 避免除以零
+        return volume
+
+    def int_number(self, number):
+        return np.floor(number).astype(int)
 
 
 def example_test_case_preprocessing():

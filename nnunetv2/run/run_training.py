@@ -34,7 +34,8 @@ def get_trainer_from_args(dataset_name_or_id: Union[int, str],
                           trainer_name: str = 'nnUNetTrainer',
                           plans_identifier: str = 'nnUNetPlans',
                           use_compressed: bool = False,
-                          device: torch.device = torch.device('cuda')):
+                          device: torch.device = torch.device('cuda'),
+                          stage: int = 1):
     # load nnunet class and do sanity checks
     nnunet_trainer = recursive_find_python_class(join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),
                                                 trainer_name, 'nnunetv2.training.nnUNetTrainer')
@@ -63,15 +64,16 @@ def get_trainer_from_args(dataset_name_or_id: Union[int, str],
     plans = load_json(plans_file)
     dataset_json = load_json(join(preprocessed_dataset_folder_base, 'dataset.json'))
     nnunet_trainer = nnunet_trainer(plans=plans, configuration=configuration, fold=fold,
-                                    dataset_json=dataset_json, unpack_dataset=not use_compressed, device=device)
+                                    dataset_json=dataset_json, unpack_dataset=not use_compressed, device=device, stage=stage)
     return nnunet_trainer
 
 
 def maybe_load_checkpoint(nnunet_trainer: nnUNetTrainer, continue_training: bool, validation_only: bool,
-                          pretrained_weights_file: str = None):
+                          pretrained_weights_file: str = None, stage: int = 1):
     if continue_training and pretrained_weights_file is not None:
         raise RuntimeError('Cannot both continue a training AND load pretrained weights. Pretrained weights can only '
                            'be used at the beginning of the training.')
+    #TODO: 如果我们想针对不同的阶段load不同的checkpoint，这里需要hard code一下，目前没有做修改
     if continue_training:
         expected_checkpoint_file = join(nnunet_trainer.output_folder, 'checkpoint_final.pth')
         if not isfile(expected_checkpoint_file):
@@ -91,7 +93,7 @@ def maybe_load_checkpoint(nnunet_trainer: nnUNetTrainer, continue_training: bool
         if pretrained_weights_file is not None:
             if not nnunet_trainer.was_initialized:
                 nnunet_trainer.initialize()
-            load_pretrained_weights(nnunet_trainer.network, pretrained_weights_file, verbose=True)
+            load_pretrained_weights(nnunet_trainer.network, pretrained_weights_file, verbose=True, stage=stage)
         expected_checkpoint_file = None
 
     if expected_checkpoint_file is not None:
@@ -131,7 +133,7 @@ def run_ddp(rank, dataset_name_or_id, configuration, fold, tr, p, use_compressed
 
     if val_with_best:
         nnunet_trainer.load_checkpoint(join(nnunet_trainer.output_folder, 'checkpoint_best.pth'))
-    nnunet_trainer.perform_actual_validation(npz)
+    # nnunet_trainer.perform_actual_validation(npz)
     cleanup_ddp()
 
 
@@ -147,9 +149,10 @@ def run_training(dataset_name_or_id: Union[str, int],
                  only_run_validation: bool = False,
                  disable_checkpointing: bool = False,
                  val_with_best: bool = False,
-                 device: torch.device = torch.device('cuda')):
+                 device: torch.device = torch.device('cuda'),
+                 stage: int = 1):
     if isinstance(fold, str):
-        if fold != 'all':
+        if fold == 'all' or fold == 'key':
             try:
                 fold = int(fold)
             except ValueError as e:
@@ -159,7 +162,7 @@ def run_training(dataset_name_or_id: Union[str, int],
     if val_with_best:
         assert not disable_checkpointing, '--val_best is not compatible with --disable_checkpointing'
 
-    if num_gpus > 1:
+    if num_gpus > 1: #TODO: change the multi-gpu training, currently it is still the default version, without three stage training
         assert device.type == 'cuda', f"DDP training (triggered by num_gpus > 1) is only implemented for cuda devices. Your device: {device}"
 
         os.environ['MASTER_ADDR'] = 'localhost'
@@ -187,25 +190,25 @@ def run_training(dataset_name_or_id: Union[str, int],
                  join=True)
     else:
         nnunet_trainer = get_trainer_from_args(dataset_name_or_id, configuration, fold, trainer_class_name,
-                                               plans_identifier, use_compressed_data, device=device)
+                                               plans_identifier, use_compressed_data, device=device, stage=stage)
 
-        if disable_checkpointing:
+        if disable_checkpointing: #不去存储checkpoint
             nnunet_trainer.disable_checkpointing = disable_checkpointing
 
         assert not (continue_training and only_run_validation), f'Cannot set --c and --val flag at the same time. Dummy.'
 
-        maybe_load_checkpoint(nnunet_trainer, continue_training, only_run_validation, pretrained_weights)
+        maybe_load_checkpoint(nnunet_trainer, continue_training, only_run_validation, pretrained_weights, stage)
 
         if torch.cuda.is_available():
             cudnn.deterministic = False
             cudnn.benchmark = True
 
-        if not only_run_validation:
+        if not only_run_validation: # not False == True
             nnunet_trainer.run_training()
 
         if val_with_best:
             nnunet_trainer.load_checkpoint(join(nnunet_trainer.output_folder, 'checkpoint_best.pth'))
-        nnunet_trainer.perform_actual_validation(export_validation_probabilities)
+        # nnunet_trainer.perform_actual_validation(export_validation_probabilities)
 
 
 def run_training_entry():
@@ -249,6 +252,8 @@ def run_training_entry():
                     help="Use this to set the device the training should run with. Available options are 'cuda' "
                          "(GPU), 'cpu' (CPU) and 'mps' (Apple M1/M2). Do NOT use this to set which GPU ID! "
                          "Use CUDA_VISIBLE_DEVICES=X nnUNetv2_train [...] instead!")
+    parser.add_argument('-stage', type=int, default=1, required=True,
+                        help="The specified training stage if we want to training the nnUnet with key point branch regression together.")
     args = parser.parse_args()
 
     assert args.device in ['cpu', 'cuda', 'mps'], f'-device must be either cpu, mps or cuda. Other devices are not tested/supported. Got: {args.device}.'
@@ -267,7 +272,7 @@ def run_training_entry():
 
     run_training(args.dataset_name_or_id, args.configuration, args.fold, args.tr, args.p, args.pretrained_weights,
                  args.num_gpus, args.use_compressed, args.npz, args.c, args.val, args.disable_checkpointing, args.val_best,
-                 device=device)
+                 device=device, stage=args.stage)
 
 
 if __name__ == '__main__':

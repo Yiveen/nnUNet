@@ -105,7 +105,7 @@ def preprocess_dataset(dataset_id: int,
     plans_file = join(nnUNet_preprocessed, dataset_name, plans_identifier + '.json')
     plans_manager = PlansManager(plans_file)
     for n, c in zip(num_processes, configurations):
-        if c == '3d_fullres':
+        if '3d_fullres' in c:
             print(f'Configuration: {c}...')
             if c not in plans_manager.available_configurations:
                 print(
@@ -127,6 +127,10 @@ def preprocess_dataset(dataset_id: int,
         copy_file(dataset[k]['label'],
                   join(nnUNet_preprocessed, dataset_name, 'gt_segmentations', k + dataset_json['file_ending']),
                   update=True)
+    # for k in dataset:
+    #     copy_file(dataset[k]['label'],
+    #               join(nnUNet_preprocessed, dataset_name, 'gt_segmentations', k + dataset_json['file_ending']),
+    #               update=True)
 
 
 

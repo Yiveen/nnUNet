@@ -17,11 +17,13 @@ class nnUNetDataLoaderBase(DataLoader):
                  oversample_foreground_percent: float = 0.0,
                  sampling_probabilities: Union[List[int], Tuple[int, ...], np.ndarray] = None,
                  pad_sides: Union[List[int], Tuple[int, ...], np.ndarray] = None,
-                 probabilistic_oversampling: bool = False):
+                 probabilistic_oversampling: bool = False,
+                 stage: int = 2):
         super().__init__(data, batch_size, 1, None, True, False, True, sampling_probabilities)
         assert isinstance(data, nnUNetDataset), 'nnUNetDataLoaderBase only supports dictionaries as data'
         self.indices = list(data.keys())
 
+        self.stage = stage
         self.oversample_foreground_percent = oversample_foreground_percent
         self.final_patch_size = final_patch_size
         self.patch_size = patch_size #(208,238,196)
@@ -35,7 +37,7 @@ class nnUNetDataLoaderBase(DataLoader):
             self.need_to_pad += pad_sides
         self.num_channels = None
         self.pad_sides = pad_sides
-        self.data_shape, self.seg_shape = self.determine_shapes()
+        self.data_shape, self.seg_shape, self.key_shape = self.determine_shapes()
         self.sampling_probabilities = sampling_probabilities
         self.annotated_classes_key = tuple(label_manager.all_labels)
         self.has_ignore = label_manager.has_ignore_label
@@ -54,12 +56,15 @@ class nnUNetDataLoaderBase(DataLoader):
 
     def determine_shapes(self):
         # load one case
-        data, seg, properties = self._data.load_case(self.indices[0])
+        data, seg, properties, key = self._data.load_case(self.indices[0], stage=self.stage) #这里会走dataset里面的load_case
         num_color_channels = data.shape[0]
 
         data_shape = (self.batch_size, num_color_channels, *self.patch_size) #num_color_channels=1
         seg_shape = (self.batch_size, seg.shape[0], *self.patch_size) #seg.shape[0]=1
-        return data_shape, seg_shape
+        key_shape = None
+        if key is not None:
+            key_shape = (self.batch_size, key.shape[0], *self.patch_size)
+        return data_shape, seg_shape, key_shape
 
     def get_bbox(self, data_shape: np.ndarray, force_fg: bool, class_locations: Union[dict, None],
                  overwrite_class: Union[int, Tuple[int, ...]] = None, verbose: bool = False):
@@ -87,7 +92,7 @@ class nnUNetDataLoaderBase(DataLoader):
         else:
             if not force_fg and self.has_ignore:
                 selected_class = self.annotated_classes_key
-                if len(class_locations[selected_class]) == 0:
+                if len(class_locations[selected_class]) == 0: #class_location就是在properties里面采样的10000个每一个点的位置
                     # no annotated pixels in this case. Not good. But we can hardly skip it here
                     print('Warning! No annotated pixels in image!')
                     selected_class = None
@@ -99,7 +104,7 @@ class nnUNetDataLoaderBase(DataLoader):
                                                                       'have class_locations (missing key)'
                 # this saves us a np.unique. Preprocessing already did that for all cases. Neat.
                 # class_locations keys can also be tuple
-                eligible_classes_or_regions = [i for i in class_locations.keys() if len(class_locations[i]) > 0]
+                eligible_classes_or_regions = [i for i in class_locations.keys() if len(class_locations[i]) > 0] # eligible_classes_or_regions = [1.2]
 
                 # if we have annotated_classes_key locations and other classes are present, remove the annotated_classes_key from the list
                 # strange formulation needed to circumvent
@@ -122,10 +127,10 @@ class nnUNetDataLoaderBase(DataLoader):
                 # print(f'I want to have foreground, selected class: {selected_class}')
             else:
                 raise RuntimeError('lol what!?')
-            voxels_of_that_class = class_locations[selected_class] if selected_class is not None else None
+            voxels_of_that_class = class_locations[selected_class] if selected_class is not None else None #(10000,4)
 
             if voxels_of_that_class is not None and len(voxels_of_that_class) > 0:
-                selected_voxel = voxels_of_that_class[np.random.choice(len(voxels_of_that_class))]
+                selected_voxel = voxels_of_that_class[np.random.choice(len(voxels_of_that_class))] #从中随机选择一个voxel
                 # selected voxel is center voxel. Subtract half the patch size to get lower bbox voxel.
                 # Make sure it is within the bounds of lb and ub
                 # i + 1 because we have first dimension 0!

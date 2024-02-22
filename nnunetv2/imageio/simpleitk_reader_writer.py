@@ -127,3 +127,17 @@ class SimpleITKIO(BaseReaderWriter):
         itk_image.SetDirection(properties['sitk_stuff']['direction'])
 
         sitk.WriteImage(itk_image, output_fname, True)
+
+    def write_key(self, key: np.ndarray, output_fname: str, properties: dict) -> None:
+        assert key.ndim == 4, 'key is 4 dimensional'
+        output_dimension = len(properties['sitk_stuff']['spacing'])
+        assert 1 < output_dimension < 4
+        if output_dimension == 2:
+            key = key[0]
+
+        itk_image = sitk.GetImageFromArray(key.astype(np.uint8))
+        itk_image.SetSpacing(properties['sitk_stuff']['spacing'])
+        itk_image.SetOrigin(properties['sitk_stuff']['origin'])
+        itk_image.SetDirection(properties['sitk_stuff']['direction'])
+
+        sitk.WriteImage(itk_image, output_fname, True)

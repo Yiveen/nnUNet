@@ -3,7 +3,7 @@ from torch._dynamo import OptimizedModule
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 
-def load_pretrained_weights(network, fname, verbose=False):
+def load_pretrained_weights(network, fname, verbose=False, stage=1):
     """
     Transfers all weights between matching keys in state_dicts. matching is done by name and we only transfer if the
     shape is also the same. Segmentation layers (the 1x1(x1) layers that produce the segmentation maps)
@@ -49,10 +49,12 @@ def load_pretrained_weights(network, fname, verbose=False):
     #                    for k, v in pretrained_dict.items()
     #                    if (('module.' + k if is_ddp else k) in model_dict) and
     #                    all([i not in k for i in skip_strings_in_pretrained])}
-
-    pretrained_dict = {k: v for k, v in pretrained_dict.items()
-                       if k in model_dict.keys() and all([i not in k for i in skip_strings_in_pretrained])}
-
+    if stage != 3:
+        pretrained_dict = {k: v for k, v in pretrained_dict.items()
+                           if k in model_dict.keys() and not k.endswith('key') and all([i not in k for i in skip_strings_in_pretrained])}
+    else:
+        pretrained_dict = {k: v for k, v in pretrained_dict.items()
+                           if k in model_dict.keys() and all([i not in k for i in skip_strings_in_pretrained])}
     model_dict.update(pretrained_dict)
 
     print("################### Loading pretrained weights from file ", fname, '###################')
@@ -61,6 +63,11 @@ def load_pretrained_weights(network, fname, verbose=False):
         for key, value in pretrained_dict.items():
             print(key, 'shape', value.shape)
         print("################### Done ###################")
-    mod.load_state_dict(model_dict)
+    mod.load_state_dict(model_dict, strict=False)
+
+    if stage == 2:
+        for name, param in mod.named_parameters():
+            if 'key' not in name:  # 假设您想要冻结名为 'layer_name' 的层的参数
+                param.requires_grad = False
 
 

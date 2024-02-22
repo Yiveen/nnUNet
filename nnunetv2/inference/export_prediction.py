@@ -12,6 +12,46 @@ from nnunetv2.utilities.label_handling.label_handling import LabelManager
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager, ConfigurationManager
 
 
+
+def convert_predicted_key_with_correct_shape(predicted_keys: Union[torch.Tensor, np.ndarray],
+                                                                plans_manager: PlansManager,
+                                                                configuration_manager: ConfigurationManager,
+                                                                label_manager: LabelManager,
+                                                                properties_dict: dict,
+                                                                return_probabilities: bool = False,
+                                                                num_threads_torch: int = default_num_processes):
+    old_threads = torch.get_num_threads()
+    torch.set_num_threads(num_threads_torch)
+
+    # resample to original shape
+    current_spacing = configuration_manager.spacing if \
+        len(configuration_manager.spacing) == \
+        len(properties_dict['shape_after_cropping_and_before_resampling']) else \
+        [properties_dict['spacing'][0], *configuration_manager.spacing]
+    predicted_keys = configuration_manager.resampling_fn_probabilities(predicted_keys,
+                                            properties_dict['shape_after_cropping_and_before_resampling'],
+                                            current_spacing,
+                                            properties_dict['spacing']) #nnunetv2.preprocessing.resampling.default_resampling import resample_data_or_seg_to_shape
+
+    # segmentation may be torch.Tensor but we continue with numpy
+    if isinstance(predicted_keys, torch.Tensor):
+        predicted_keys = predicted_keys.cpu().numpy()
+
+    # put segmentation in bbox (revert cropping)
+    segmentation_reverted_cropping = np.zeros((predicted_keys.shape[0],) + properties_dict['shape_before_cropping'],
+                                              dtype=np.uint8 if len(label_manager.foreground_labels) < 255 else np.uint16)
+    slicer = bounding_box_to_slice(properties_dict['bbox_used_for_cropping'])
+    for i in range(predicted_keys.shape[0]):
+        segmentation_reverted_cropping[i][slicer] = predicted_keys[i]
+
+        segmentation_reverted_cropping[i] = segmentation_reverted_cropping[i].transpose(
+            plans_manager.transpose_backward)
+    del predicted_keys
+
+    torch.set_num_threads(old_threads)
+    return segmentation_reverted_cropping
+
+
 def convert_predicted_logits_to_segmentation_with_correct_shape(predicted_logits: Union[torch.Tensor, np.ndarray],
                                                                 plans_manager: PlansManager,
                                                                 configuration_manager: ConfigurationManager,
@@ -30,10 +70,10 @@ def convert_predicted_logits_to_segmentation_with_correct_shape(predicted_logits
     predicted_logits = configuration_manager.resampling_fn_probabilities(predicted_logits,
                                             properties_dict['shape_after_cropping_and_before_resampling'],
                                             current_spacing,
-                                            properties_dict['spacing'])
+                                            properties_dict['spacing']) #nnunetv2.preprocessing.resampling.default_resampling import resample_data_or_seg_to_shape
     # return value of resampling_fn_probabilities can be ndarray or Tensor but that does not matter because
     # apply_inference_nonlin will convert to torch
-    predicted_probabilities = label_manager.apply_inference_nonlin(predicted_logits)
+    predicted_probabilities = label_manager.apply_inference_nonlin(predicted_logits) #对输出进行softmax
     del predicted_logits
     segmentation = label_manager.convert_probabilities_to_segmentation(predicted_probabilities)
 
@@ -103,6 +143,38 @@ def export_prediction_from_logits(predicted_array_or_file: Union[np.ndarray, tor
 
     rw = plans_manager.image_reader_writer_class()
     rw.write_seg(segmentation_final, output_file_truncated + dataset_json_dict_or_file['file_ending'],
+                 properties_dict)
+
+def export_prediction_key(predicted_array_or_file: Union[np.ndarray, torch.Tensor], properties_dict: dict,
+                                  configuration_manager: ConfigurationManager,
+                                  plans_manager: PlansManager,
+                                  dataset_json_dict_or_file: Union[dict, str], output_file_truncated: str,
+                                  save_probabilities: bool = False):
+    # if isinstance(predicted_array_or_file, str):
+    #     tmp = deepcopy(predicted_array_or_file)
+    #     if predicted_array_or_file.endswith('.npy'):
+    #         predicted_array_or_file = np.load(predicted_array_or_file)
+    #     elif predicted_array_or_file.endswith('.npz'):
+    #         predicted_array_or_file = np.load(predicted_array_or_file)['softmax']
+    #     os.remove(tmp)
+
+    if isinstance(dataset_json_dict_or_file, str):
+        dataset_json_dict_or_file = load_json(dataset_json_dict_or_file)
+
+    label_manager = plans_manager.get_label_manager(dataset_json_dict_or_file)
+    ret = convert_predicted_key_with_correct_shape(
+        predicted_array_or_file, plans_manager, configuration_manager, label_manager, properties_dict,
+        return_probabilities=save_probabilities
+    )
+    del predicted_array_or_file
+
+    # save
+
+    key_final = ret
+    del ret
+
+    rw = plans_manager.image_reader_writer_class()
+    rw.write_key(key_final, output_file_truncated + '_key' + dataset_json_dict_or_file['file_ending'],
                  properties_dict)
 
 

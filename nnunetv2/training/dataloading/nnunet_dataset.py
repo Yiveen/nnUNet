@@ -6,7 +6,8 @@ import shutil
 
 from batchgenerators.utilities.file_and_folder_operations import join, load_pickle, isfile
 from nnunetv2.training.dataloading.utils import get_case_identifiers
-
+import h5py
+from scipy.sparse import csr_matrix, save_npz
 
 class nnUNetDataset(object):
     def __init__(self, folder: str, case_identifiers: List[str] = None,
@@ -38,19 +39,28 @@ class nnUNetDataset(object):
         # print('loading dataset')
         if case_identifiers is None:
             case_identifiers = get_case_identifiers(folder)
-        case_identifiers.sort()
+        case_identifiers_filtered = [f for f in case_identifiers if 'key' not in f] #TODO:记住这个写法！！
+
+        case_identifiers_filtered.sort()
         #所有训练数据,没有进行k折交叉验证分开['arota_001', 'arota_003', 'arota_005', 'arota_006', 'arota_008', 'arota_009', 'arota_010', 'arota_011', 'arota_012', 'arota_013', 'arota_014', 'arota_016', 'arota_017', 'arota_018', 'arota_019', 'arota_020', 'arota_021', 'arota_022', 'arota_023', 'arota_024', 'arota_025', 'arota_026', 'arota_027', 'arota_029', 'arota_030', 'arota_033', 'arota_035', 'arota_036', 'arota_037']
 
 
         self.dataset = {}
-        for c in case_identifiers:
+        for c in case_identifiers_filtered:
             self.dataset[c] = {}
             self.dataset[c]['data_file'] = join(folder, f"{c}.npz") #对应processed文件夹下面的npz文件
             self.dataset[c]['properties_file'] = join(folder, f"{c}.pkl") #对应processed文件夹下面的pkl文件
+
+            key_files_path = join(folder, f"{c}_key.npz")
+            if os.path.exists(key_files_path):
+                self.dataset[c]['key'] = join(folder, f"{c}key.npz")
+            else:
+                self.dataset[c]['key'] = None
+
             if folder_with_segs_from_previous_stage is not None:
                 self.dataset[c]['seg_from_prev_stage_file'] = join(folder_with_segs_from_previous_stage, f"{c}.npz")
 
-        if len(case_identifiers) <= num_images_properties_loading_threshold:#num_images_properties_loading_threshold==0
+        if len(case_identifiers_filtered) <= num_images_properties_loading_threshold:#num_images_properties_loading_threshold==0
             for i in self.dataset.keys():
                 self.dataset[i]['properties'] = load_pickle(self.dataset[i]['properties_file'])
 
@@ -79,7 +89,7 @@ class nnUNetDataset(object):
     def values(self):
         return self.dataset.values()
 
-    def load_case(self, key):
+    def load_case(self, key, stage):
         entry = self[key]
         if 'open_data_file' in entry.keys():
             data = entry['open_data_file']
@@ -103,14 +113,42 @@ class nnUNetDataset(object):
         else:
             seg = np.load(entry['data_file'])['seg']
 
+        key_label = None
+
+        if stage == 2 or stage == 3:
+            if 'open_key_file' in entry.keys():
+                seg = entry['open_key_file']
+            elif isfile(entry['data_file'][:-4] + "_key.h5"):
+                key_label = np.load(entry['data_file'][:-4] + "_key.npz")['key']
+                # with h5py.File(entry['data_file'][:-4] + "_key.h5", 'r') as f:
+                #     # 从文件中读取稀疏矩阵的组成部分
+                #     data_h5 = f['data'][:]
+                #     indices = f['indices'][:]
+                #     indptr = f['indptr'][:]
+                #     sparse_shape = f['shape'][:]
+                #
+                #     # 重构稀疏矩阵
+                #     sparse_matrix = csr_matrix((data_h5, indices, indptr), shape=sparse_shape)
+                #     dense_array = sparse_matrix.toarray()
+                #     # 读取原始形状
+                #     original_shape = f.attrs['original_shape']
+                #     key_label = dense_array.reshape(original_shape)
+
+                if self.keep_files_open:
+                    self.dataset[key]['open_key_file'] = key_label
+            else:
+                key_label = None
+
         if 'seg_from_prev_stage_file' in entry.keys():
             if isfile(entry['seg_from_prev_stage_file'][:-4] + ".npy"):
                 seg_prev = np.load(entry['seg_from_prev_stage_file'][:-4] + ".npy", 'r')
             else:
                 seg_prev = np.load(entry['seg_from_prev_stage_file'])['seg']
             seg = np.vstack((seg, seg_prev[None]))
-
-        return data, seg, entry['properties']
+        # if key_label is None:
+        #     return data, seg, entry['properties']
+        # else:
+        return data, seg, entry['properties'], key_label
 
 
 if __name__ == '__main__':

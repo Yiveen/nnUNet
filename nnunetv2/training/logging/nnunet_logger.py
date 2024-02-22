@@ -14,7 +14,7 @@ class nnUNetLogger(object):
 
     YOU MUST LOG EXACTLY ONE VALUE PER EPOCH FOR EACH OF THE LOGGING ITEMS! DONT FUCK IT UP
     """
-    def __init__(self, verbose: bool = False):
+    def __init__(self, verbose: bool = False, stage: int = 1):
         self.my_fantastic_logging = {
             'mean_fg_dice': list(),
             'ema_fg_dice': list(),
@@ -23,9 +23,11 @@ class nnUNetLogger(object):
             'val_losses': list(),
             'lrs': list(),
             'epoch_start_timestamps': list(),
-            'epoch_end_timestamps': list()
+            'epoch_end_timestamps': list(),
+            'total_dist': list()
         }
         self.verbose = verbose
+        self.stage = stage
         # shut up, this logging is great
 
     def log(self, key, value, epoch: int):
@@ -55,7 +57,10 @@ class nnUNetLogger(object):
         # we infer the epoch form our internal logging
         epoch = min([len(i) for i in self.my_fantastic_logging.values()]) - 1  # lists of epoch 0 have len 1
         sns.set(font_scale=2.5)
-        fig, ax_all = plt.subplots(3, 1, figsize=(30, 54))
+        if self.stage == 1:
+            fig, ax_all = plt.subplots(3, 1, figsize=(30, 54))
+        else:
+            fig, ax_all = plt.subplots(4, 1, figsize=(30, 54))
         # regular progress.png as we are used to from previous nnU-Net versions
         ax = ax_all[0]
         ax2 = ax.twinx()
@@ -90,6 +95,15 @@ class nnUNetLogger(object):
         ax.set_xlabel("epoch")
         ax.set_ylabel("learning rate")
         ax.legend(loc=(0, 1))
+
+        # learning rate
+        if self.stage == 2:
+            ax = ax_all[3]
+            ax.plot(x_values, self.my_fantastic_logging['total_dist'][:epoch + 1], color='b', ls='-', label="total_dist",
+                    linewidth=4)
+            ax.set_xlabel("epoch")
+            ax.set_ylabel("learning rate")
+            ax.legend(loc=(0, 1))
 
         plt.tight_layout()
 

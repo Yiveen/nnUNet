@@ -11,7 +11,9 @@ def get_network_from_plans(plans_manager: PlansManager,
                            dataset_json: dict,
                            configuration_manager: ConfigurationManager,
                            num_input_channels: int,
-                           deep_supervision: bool = True):
+                           deep_supervision: bool = True,
+                           stage: int = 1,
+                           deep_supervision_key: bool = True):
     """
     we may have to change this in the future to accommodate other plans -> network mappings
 
@@ -27,7 +29,7 @@ def get_network_from_plans(plans_manager: PlansManager,
 
     segmentation_network_class_name = configuration_manager.UNet_class_name #PlainConvUnet
     mapping = {
-        'PlainConvUNet': PlainConvUNet,
+        'PlainConvUNet': ExtendConvUNet,
         'ResidualEncoderUNet': ResidualEncoderUNet
     }
     kwargs = {
@@ -69,6 +71,8 @@ def get_network_from_plans(plans_manager: PlansManager,
         strides=configuration_manager.pool_op_kernel_sizes,
         num_classes=label_manager.num_segmentation_heads,
         deep_supervision=deep_supervision,
+        stage=stage,
+        deep_supervision_key=deep_supervision_key,
         **conv_or_blocks_per_stage,
         **kwargs[segmentation_network_class_name]
     )

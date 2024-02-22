@@ -28,7 +28,7 @@ def preprocess_fromfiles_save_to_queue(list_of_lists: List[List[str]],
         label_manager = plans_manager.get_label_manager(dataset_json)
         preprocessor = configuration_manager.preprocessor_class(verbose=verbose)
         for idx in range(len(list_of_lists)):
-            data, seg, data_properties = preprocessor.run_case(list_of_lists[idx],
+            data, seg, data_properties = preprocessor.run_case_original(list_of_lists[idx],
                                                                list_of_segs_from_prev_stage_files[
                                                                    idx] if list_of_segs_from_prev_stage_files is not None else None,
                                                                plans_manager,
@@ -150,7 +150,7 @@ class PreprocessAdapter(DataLoader):
         # if we have a segmentation from the previous stage we have to process it together with the images so that we
         # can crop it appropriately (if needed). Otherwise it would just be resized to the shape of the data after
         # preprocessing and then there might be misalignments
-        data, seg, data_properties = self.preprocessor.run_case(files, seg_prev_stage, self.plans_manager,
+        data, seg, data_properties = self.preprocessor.run_case_original(files, seg_prev_stage, self.plans_manager,
                                                                 self.configuration_manager,
                                                                 self.dataset_json)
         if seg_prev_stage is not None:

@@ -14,18 +14,20 @@ def make_out_dirs(dataset_id: int, task_name="Aorta"):
     out_train_dir = out_dir / "imagesTr"
     out_labels_dir = out_dir / "labelsTr"
     out_test_dir = out_dir / "imagesTs"
+    out_key_dir = out_dir / "keypoints"
 
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(out_train_dir, exist_ok=True)
     os.makedirs(out_labels_dir, exist_ok=True)
     os.makedirs(out_test_dir, exist_ok=True)
+    os.makedirs(out_key_dir, exist_ok=True)
 
-    return out_dir, out_train_dir, out_labels_dir, out_test_dir
+    return out_dir, out_train_dir, out_labels_dir, out_test_dir, out_key_dir
 
 
-def copy_files(src_data_folder: Path, train_dir: Path, labels_dir: Path, test_dir: Path, test_list: list, test_list_ori:list):
+def copy_files(src_data_folder: Path, train_dir: Path, labels_dir: Path, test_dir: Path, test_list: list, out_key_dir: Path):
     """Copy files from the ACDC dataset to the nnUNet dataset folder. Returns the number of training cases."""
-    patients_train = sorted([f for f in (src_data_folder).iterdir() if (f.is_dir() and str(f) not in test_list)])
+    patients_train = sorted([f for f in (src_data_folder).iterdir() if (f.is_dir() and str(f) not in test_list and 'points' not in str(f))])
     # for item in src_data_folder.iterdir() :
     #     if (str(item) in test_list):
     #         print(True)
@@ -35,7 +37,7 @@ def copy_files(src_data_folder: Path, train_dir: Path, labels_dir: Path, test_di
     # Copy training files and corresponding labels.
     for patient_dir in patients_train:
         print(patient_dir)
-        for file in patient_dir.iterdir():
+        for file in patient_dir.iterdir(): # patient_dir 是一个Path类型的数据，然后Path类型的数据才可以.iterdir()
             if file.suffix == ".nii" and "label" not in file.name and "CTA_2" in file.name:
                 # The stem is 'patient.nii', and the suffix is '.gz'.
                 # We split the stem and append _0000 to the patient part.
@@ -44,9 +46,11 @@ def copy_files(src_data_folder: Path, train_dir: Path, labels_dir: Path, test_di
                 nii_file = nib.load(str(patient_dir) + "/" + file.name)
                 # Save the file as .nii.gz
                 nib.save(nii_file, train_dir / f"arota_{str(patient_dir).split('_')[1].zfill(3)}_0000.nii.gz")
-                # shutil.copy(file, train_dir / f"arota_{str(patient_dir).split('_')[1].zfill(3)}_0000.nii")
+
+                original_json_file = str(src_data_folder) + '/key_points/' + str(patient_dir.name) + '/' + str(patient_dir.name) + '.json'
+                shutil.copy(original_json_file, out_key_dir / f"arota_{str(patient_dir).split('_')[1].zfill(3)}.json")
                 num_training_cases += 1
-            elif file.suffix == ".nii" and "label" in file.name:
+            elif file.suffix == ".nii" and "label" in file.name: #如果考虑更新label，那么旧的label文件就不要带label了
                 # Load the .nii file
                 nii_file = nib.load(str(patient_dir) + "/" + file.name)
                 # Save the file as .nii.gz
@@ -54,7 +58,7 @@ def copy_files(src_data_folder: Path, train_dir: Path, labels_dir: Path, test_di
 
                 # shutil.copy(file, labels_dir / f"arota_{str(patient_dir).split('_')[1].zfill(3)}.nii")
     # Copy test files.
-    #    file.name 将返回 a_file.txt（完整的文件名和扩展名）。
+    #    file.name 将返回 a_file.txt（完整的文件名和扩展名）。The .name attribute specifically returns the last component of the path, regardless of whether it's a file name or a directory name
     #    file.stem 将返回 a_file（仅文件名，不包括扩展名）。
     #    file.suffix 将返回 .txt（仅扩展名）。
     for patient_dir in patients_test:
@@ -71,9 +75,9 @@ def copy_files(src_data_folder: Path, train_dir: Path, labels_dir: Path, test_di
     return num_training_cases
 
 
-def convert_own(src_data_folder: str, test_list: list, test_list_ori:list, dataset_id=100):
-    out_dir, train_dir, labels_dir, test_dir = make_out_dirs(dataset_id=dataset_id)
-    num_training_cases = copy_files(Path(src_data_folder), train_dir, labels_dir, test_dir, test_list, test_list_ori)
+def convert_own(src_data_folder: str, test_list: list, dataset_id=100):
+    out_dir, train_dir, labels_dir, test_dir, out_key_dir = make_out_dirs(dataset_id=dataset_id)
+    num_training_cases = copy_files(Path(src_data_folder), train_dir, labels_dir, test_dir, test_list, out_key_dir)
 
     generate_dataset_json(
         str(out_dir),
@@ -82,10 +86,12 @@ def convert_own(src_data_folder: str, test_list: list, test_list_ori:list, datas
         },#not sure here!!
         labels={
             "background": 0,
-            "AORTA": 1,
+            "Vessel": 1,
+            "AAA": 2,
         },
         file_ending=".nii.gz",
         num_training_cases=num_training_cases,
+        key_ending=".json"
     )
 
 
@@ -96,7 +102,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-i",
         "--input_folder",
-        default='/home/yiwen/dataset/Newdataset/',
+        default='/home/yiwen/FinalDataset/',
         type=str,
         help="The downloaded our own dataset dir. Should contain extracted 'training' and 'testing' folders.",
     )
@@ -108,5 +114,5 @@ if __name__ == "__main__":
     test_list = [args.input_folder + item for item in test_list_ori]
     print('111',test_list)
     print("Converting...")
-    convert_own(args.input_folder, test_list, test_list_ori, args.dataset_id)
+    convert_own(args.input_folder, test_list, args.dataset_id)
     print("Done!")

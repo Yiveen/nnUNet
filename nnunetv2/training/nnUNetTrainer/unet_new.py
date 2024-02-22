@@ -26,7 +26,9 @@ class ExtendConvUNet(PlainConvUNet):
                  nonlin: Union[None, Type[torch.nn.Module]] = None,
                  nonlin_kwargs: dict = None,
                  deep_supervision: bool = False,
-                 nonlin_first: bool = False):
+                 nonlin_first: bool = False,
+                 stage: int = 1,
+                 deep_supervision_key: bool = None):
         '''
         {'conv_bias': True, 'norm_op': <class 'torch.nn.modules.instancenorm.InstanceNorm3d'>, 'norm_op_kwargs': {'eps': 1e-05, 'affine': True},
         'dropout_op': None, 'dropout_op_kwargs': None, 'nonlin': <class 'torch.nn.modules.activation.LeakyReLU'>, 'nonlin_kwargs': {'inplace': True}}
@@ -34,11 +36,19 @@ class ExtendConvUNet(PlainConvUNet):
         '''
         super(ExtendConvUNet, self).__init__(input_channels, n_stages, features_per_stage, conv_op, kernel_sizes, strides, n_conv_per_stage, num_classes, n_conv_per_stage_decoder,
                                              conv_bias, norm_op, norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs)
-        self.decoder = ExtendUNetDecoder(self.encoder, num_classes, n_conv_per_stage_decoder, deep_supervision,
-                                   nonlin_first=nonlin_first)
+        self.stage = stage
+        if self.stage == 1:
+            pass
+        else:
+            self.decoder = ExtendUNetDecoder(self.encoder, num_classes, n_conv_per_stage_decoder, deep_supervision,
+                                   nonlin_first=nonlin_first, deep_supervision_key=deep_supervision_key)
 
     def forward(self, x):
         skips = self.encoder(x)
-        seg, key = self.decoder(skips)
-        return seg, key
+        if self.stage == 1:
+            seg = self.decoder(skips)
+            return seg
+        else:
+            seg, key = self.decoder(skips)
+            return seg, key
 
