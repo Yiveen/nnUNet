@@ -62,7 +62,7 @@ from torch import distributed as dist
 from torch.cuda import device_count
 from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from nnunetv2.training.loss.key_loss import WeightedMSELoss
+from nnunetv2.training.loss.key_loss import WeightedMSELoss, MultiLossFactory, OffsetLoss
 from nnunetv2.training.data_augmentation.custom_transforms.spatial_transform_new import SpatialTransformNew
 
 
@@ -136,7 +136,7 @@ class nnUNetTrainer(object):
                                            self.__class__.__name__ + '__' + self.plans_manager.plans_name + "__" + configuration + 'stage' + str(stage)) \
                 if nnUNet_results is not None else None
 
-        self.output_folder = join(self.output_folder_base, f'fold_{fold}')
+        self.output_folder = join(self.output_folder_base, f'fold_{fold}——final-with-attention-full')
 
         self.preprocessed_dataset_folder = join(self.preprocessed_dataset_folder_base,
                                                 self.configuration_manager.data_identifier)
@@ -152,12 +152,12 @@ class nnUNetTrainer(object):
                 if self.is_cascaded else None
 
         ### Some hyperparameters for you to fiddle with
-        self.initial_lr = 0.017
+        self.initial_lr = 0.001
         self.weight_decay = 3e-5
         self.oversample_foreground_percent = 0.33
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 500
+        self.num_epochs = 90
         self.current_epoch = 0
         self.enable_deep_supervision = True
 
@@ -188,13 +188,14 @@ class nnUNetTrainer(object):
 
         ### initializing stuff for remembering things and such
         self._best_ema = None
+        self._best_dist = None
 
         ### inference things
         self.inference_allowed_mirroring_axes = None  # this variable is set in
         # self.configure_rotation_dummyDA_mirroring_and_inital_patch_size and will be saved in checkpoints
 
         ### checkpoint saving stuff
-        self.save_every = 50
+        self.save_every = 10
         self.disable_checkpointing = False
 
         ## DDP batch size and oversampling can differ between workers and needs adaptation
@@ -395,8 +396,15 @@ class nnUNetTrainer(object):
         # now wrap the loss
         loss = DeepSupervisionWrapper(loss, weights) #[0.53333333 0.26666667 0.13333333 0.06666667 0.        ]
 
-        key_loss = WeightedMSELoss(weight_nonzero=2.0)
-        key_loss = DeepSupervisionWrapper(key_loss, weights)
+        # key_loss = MultiLossFactory()
+        key_loss1 = WeightedMSELoss(weight_nonzero=1.5)
+        # key_loss1 = FocalLossForRegression()
+        key_loss2 = OffsetLoss()
+        # key_loss = DeepSupervisionWrapper(key_loss, weights)
+        key_loss1 = DeepSupervisionWrapper(key_loss1, weights)
+        key_loss2 = DeepSupervisionWrapper(key_loss2, weights)
+        # key_loss3 = DeepSupervisionWrapper(key_loss3, weights)
+        key_loss = [key_loss1, key_loss2]
         if self.stage == 1:
             return loss, None
         elif self.stage == 2:
@@ -438,20 +446,30 @@ class nnUNetTrainer(object):
                     'z': (0, 0)
                 }
             else:  # 如果不进行虚拟2d数据增强
-                rotation_for_DA = {  # 设置三个轴的旋转范围
-                    'x': (-30. / 360 * 2. * np.pi, 30. / 360 * 2. * np.pi),
-                    'y': (-30. / 360 * 2. * np.pi, 30. / 360 * 2. * np.pi),
-                    'z': (-30. / 360 * 2. * np.pi, 30. / 360 * 2. * np.pi),
-                }
+                if self.stage == 1:
+                    rotation_for_DA = {  # 设置三个轴的旋转范围
+                        'x': (-30. / 360 * 2. * np.pi, 30. / 360 * 2. * np.pi),
+                        'y': (-30. / 360 * 2. * np.pi, 30. / 360 * 2. * np.pi),
+                        'z': (-30. / 360 * 2. * np.pi, 30. / 360 * 2. * np.pi),
+                    }
+                else:
+                    rotation_for_DA = {  # 设置三个轴的旋转范围
+                        'x': (0, 0),
+                        'y': (0, 0),
+                        'z': (0, 0),
+                    }
             # mirror_axes = (0, 1, 2)  # 设置三维数据的镜像轴
             mirror_axes = None  # 我们不进行镜像处理
         else:
             raise RuntimeError()  # 如果既不是二维也不是三维数据，则抛出异常
 
         # todo: 这个函数不理想。它甚至没有使用正确的缩放范围（目前我们保持旧 nnunet 的设置）
-        initial_patch_size = get_patch_size(patch_size[-dim:],  # 计算考虑旋转后的初始补丁大小
-                                            *rotation_for_DA.values(),
-                                            (0.85, 1.25))
+        if self.stage == 1:
+            initial_patch_size = get_patch_size(patch_size[-dim:],  # 计算考虑旋转后的初始补丁大小
+                                                *rotation_for_DA.values(),
+                                                (0.85, 1.25))
+        else:
+            initial_patch_size = patch_size
         if do_dummy_2d_data_aug:  # 如果进行虚拟2d数据增强
             initial_patch_size[0] = patch_size[0]  # 保持第一个维度的补丁大小不变
 
@@ -788,7 +806,7 @@ class nnUNetTrainer(object):
             tr_transforms.append(SpatialTransformNew(
                 patch_size_spatial, patch_center_dist_from_border=None,
                 do_elastic_deform=False, alpha=(0, 0), sigma=(0, 0),
-                do_rotation=True, angle_x=rotation_for_DA['x'], angle_y=rotation_for_DA['y'], angle_z=rotation_for_DA['z'],
+                do_rotation=False, angle_x=rotation_for_DA['x'], angle_y=rotation_for_DA['y'], angle_z=rotation_for_DA['z'],
                 p_rot_per_axis=1,  # todo experiment with this
                 do_scale=True, scale=(0.7, 1.4),
                 border_mode_data="constant", border_cval_data=0, order_data=order_resampling_data,
@@ -819,8 +837,8 @@ class nnUNetTrainer(object):
         if use_mask_for_norm is not None and any(use_mask_for_norm):
             tr_transforms.append(MaskTransform([i for i in range(len(use_mask_for_norm)) if use_mask_for_norm[i]],
                                                mask_idx_in_seg=0, set_outside_to=0))
-
-        tr_transforms.append(RemoveLabelTransform(-1, 0))
+        if stage == 1:
+            tr_transforms.append(RemoveLabelTransform(-1, 0))
 
         if is_cascaded:
             assert foreground_labels is not None, 'We need foreground_labels for cascade augmentations'
@@ -838,8 +856,8 @@ class nnUNetTrainer(object):
                     p_per_sample=0.2,
                     fill_with_other_class_p=0,
                     dont_do_if_covers_more_than_x_percent=0.15))
-
-        tr_transforms.append(RenameTransform('seg', 'target', True))
+        if stage == 1:
+            tr_transforms.append(RenameTransform('seg', 'target', True))
 
         if regions is not None:
             # the ignore label must also be converted
@@ -852,8 +870,6 @@ class nnUNetTrainer(object):
                 tr_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, input_key='target',
                                                                   output_key='target'))
             elif stage == 2:
-                tr_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, input_key='target',
-                                                                  output_key='target'))
                 tr_transforms.append(DownsampleSegForDSTransformContinuous(deep_supervision_scales, 0, input_key='key_points',
                                                                   output_key='key_points'))
             else:
@@ -864,7 +880,7 @@ class nnUNetTrainer(object):
         if stage == 1:
             tr_transforms.append(NumpyToTensor(['data', 'target'], 'float'))
         else:
-            tr_transforms.append(NumpyToTensor(['data', 'target', 'key_points'], 'float'))
+            tr_transforms.append(NumpyToTensor(['data', 'key_points'], 'float'))
         tr_transforms = Compose(tr_transforms)
         return tr_transforms
 
@@ -875,12 +891,13 @@ class nnUNetTrainer(object):
                                   regions: List[Union[List[int], Tuple[int, ...], int]] = None,
                                   ignore_label: int = None, stage: int = None) -> AbstractTransform:
         val_transforms = []
-        val_transforms.append(RemoveLabelTransform(-1, 0))
+        if stage == 1:
+            val_transforms.append(RemoveLabelTransform(-1, 0))
 
         if is_cascaded:
             val_transforms.append(MoveSegAsOneHotToData(1, foreground_labels, 'seg', 'data'))
-
-        val_transforms.append(RenameTransform('seg', 'target', True))
+        if stage == 1:
+            val_transforms.append(RenameTransform('seg', 'target', True))
 
         if regions is not None:
             # the ignore label must also be converted
@@ -893,8 +910,6 @@ class nnUNetTrainer(object):
                 val_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, input_key='target',
                                                                output_key='target'))
             elif stage == 2:
-                val_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, input_key='target',
-                                                                   output_key='target'))
                 val_transforms.append(DownsampleSegForDSTransformContinuous(deep_supervision_scales, 0, input_key='key_points',
                                                                    output_key='key_points'))
             else:
@@ -906,7 +921,7 @@ class nnUNetTrainer(object):
         if stage == 1:
             val_transforms.append(NumpyToTensor(['data', 'target'], 'float'))
         else:
-            val_transforms.append(NumpyToTensor(['data', 'target', 'key_points'], 'float'))
+            val_transforms.append(NumpyToTensor(['data', 'key_points'], 'float'))
         val_transforms = Compose(val_transforms)
         return val_transforms
 
@@ -918,8 +933,11 @@ class nnUNetTrainer(object):
         if self.is_ddp:
             self.network.module.decoder.deep_supervision = enabled
         else:
-            self.network.decoder.deep_supervision_key = enabled
-            self.network.decoder.deep_supervision = enabled
+            if self.stage == 1:
+                self.network.decoder.deep_supervision = enabled
+            else:
+                self.network.decoder.deep_supervision_key = enabled
+                self.network.decoder.deep_supervision = enabled
 
 
     def on_train_start(self):
@@ -957,7 +975,7 @@ class nnUNetTrainer(object):
                     join(self.output_folder_base, 'dataset_fingerprint.json'))
 
         # produces a pdf in output folder
-        self.plot_network_architecture()
+        # self.plot_network_architecture()
 
         self._save_debug_information()
 
@@ -1000,23 +1018,29 @@ class nnUNetTrainer(object):
 
     def train_step(self, batch: dict) -> dict:
         data = batch['data']
-        target = batch['target']
+        if self.stage == 1:
+            target = batch['target']
         key = None
         if 'key_points' in batch.keys():
             key = batch['key_points']
 
         data = data.to(self.device, non_blocking=True)
-        if isinstance(target, list):
+        # if isinstance(target, list):
+        #     target = [i.to(self.device, non_blocking=True) for i in target]
+        #     if key is not None:
+        #         key = [i.to(self.device, non_blocking=True) for i in key]
+        #         non_zero_indices = torch.where(key[0] > 0)
+        #         max = torch.max(non_zero_indices[0])
+        # else:
+        #     target = target.to(self.device, non_blocking=True)
+        #     if key is not None:
+        #         key = key.to(self.device, non_blocking=True)
+        #         non_zero_indices = torch.where(key > 0)
+        if self.stage == 1:
             target = [i.to(self.device, non_blocking=True) for i in target]
-            if key is not None:
-                key = [i.to(self.device, non_blocking=True) for i in key]
-                non_zero_indices = torch.where(key[0] > 0)
-                max = torch.max(non_zero_indices[0])
-        else:
-            target = target.to(self.device, non_blocking=True)
-            if key is not None:
-                key = key.to(self.device, non_blocking=True)
-                non_zero_indices = torch.where(key > 0)
+        if key is not None:
+            key = [i.to(self.device, non_blocking=True) for i in key]
+
 
         self.optimizer.zero_grad(set_to_none=True)
         # Autocast is a little bitch.
@@ -1027,12 +1051,22 @@ class nnUNetTrainer(object):
             with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
                 output = self.network(data)
                 # del data
+                # print(target[0].min(), target[0].max())
                 l = self.loss(output, target)
         elif self.stage == 2:
             with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
                 output, key_out = self.network(data)
                 # del data
-                l = self.loss_key(key_out, key)
+                l1 = self.loss_key[0](key_out, key)
+                l2 = self.loss_key[1](key_out, key)
+                if self.current_epoch <= 35:
+                    l = 1.2 * l1 + l2 / ((l2 / l1).detach())
+                elif self.current_epoch <= 50:
+                    l = 1.0 * l1 + l2 / ((l2 / l1).detach())
+                elif self.current_epoch <= 70:
+                    l = 0.8 * l1 + l2 / ((l2 / l1).detach())
+                else:
+                    l = 0.6 * l1 + l2 / ((l2 / l1).detach())
         else:
             with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
                 output, key_out = self.network(data)
@@ -1068,20 +1102,25 @@ class nnUNetTrainer(object):
 
     def validation_step(self, batch: dict) -> dict:
         data = batch['data']
-        target = batch['target']
+        if self.stage == 1:
+            target = batch['target']
         key = None
         if 'key_points' in batch.keys():
             key = batch['key_points']
 
         data = data.to(self.device, non_blocking=True)
-        if isinstance(target, list):
+        # if isinstance(target, list):
+        #     target = [i.to(self.device, non_blocking=True) for i in target]
+        #     if key is not None:
+        #         key = [i.to(self.device, non_blocking=True) for i in key]
+        # else:
+        #     target = target.to(self.device, non_blocking=True)
+        #     if key is not None:
+        #         key = key.to(self.device, non_blocking=True)
+        if self.stage == 1:
             target = [i.to(self.device, non_blocking=True) for i in target]
-            if key is not None:
-                key = [i.to(self.device, non_blocking=True) for i in key]
-        else:
-            target = target.to(self.device, non_blocking=True)
-            if key is not None:
-                key = key.to(self.device, non_blocking=True)
+        if key is not None:
+            key = [i.to(self.device, non_blocking=True) for i in key]
 
         # Autocast is a little bitch.
         # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
@@ -1097,7 +1136,16 @@ class nnUNetTrainer(object):
             with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
                 output, key_out = self.network(data)
                 # del data
-                l = self.loss_key(key_out, key)
+                l1 = self.loss_key[0](key_out, key)
+                l2 = self.loss_key[1](key_out, key)
+                if self.current_epoch <= 35:
+                    l = 1.2 * l1 + l2 / ((l2 / l1).detach())
+                elif self.current_epoch <= 50:
+                    l = 1.0 * l1 + l2 / ((l2 / l1).detach())
+                elif self.current_epoch <= 70:
+                    l = 0.8 * l1 + l2 / ((l2 / l1).detach())
+                else:
+                    l = 0.6 * l1 + l2 / ((l2 / l1).detach())
         else:
             with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
                 output, key_out = self.network(data)
@@ -1106,7 +1154,8 @@ class nnUNetTrainer(object):
         # TODO: Add some criterion for key branch
         # we only need the output with the highest output resolution
         output = output[0]
-        target = target[0]
+        if self.stage == 1:
+            target = target[0]
         if self.stage != 1:
             if self.deep_supervision_key:
                 key_out_last = key_out[0]
@@ -1114,57 +1163,58 @@ class nnUNetTrainer(object):
             else:
                 key_out_last = key_out
                 key_last = key
-
-        # the following is needed for online evaluation. Fake dice (green line)
-        axes = [0] + list(range(2, output.ndim))
-
-        if self.label_manager.has_regions:
-            predicted_segmentation_onehot = (torch.sigmoid(output) > 0.5).long()
-        else:
-            # no need for softmax
-            output_seg = output.argmax(1)[:, None]
-            predicted_segmentation_onehot = torch.zeros(output.shape, device=output.device, dtype=torch.float32)
-            predicted_segmentation_onehot.scatter_(1, output_seg, 1)
-            del output_seg
-
-        if self.label_manager.has_ignore_label:
-            if not self.label_manager.has_regions:
-                mask = (target != self.label_manager.ignore_label).float()
-                # CAREFUL that you don't rely on target after this line!
-                target[target == self.label_manager.ignore_label] = 0
-            else:
-                mask = 1 - target[:, -1:]
-                # CAREFUL that you don't rely on target after this line!
-                target = target[:, :-1]
-        else:
-            mask = None
-
-        tp, fp, fn, _ = get_tp_fp_fn_tn(predicted_segmentation_onehot, target, axes=axes, mask=mask)
-
-        tp_hard = tp.detach().cpu().numpy()
-        fp_hard = fp.detach().cpu().numpy()
-        fn_hard = fn.detach().cpu().numpy()
-        if not self.label_manager.has_regions:
-            # if we train with regions all segmentation heads predict some kind of foreground. In conventional
-            # (softmax training) there needs tobe one output for the background. We are not interested in the
-            # background Dice
-            # [1:] in order to remove background
-            tp_hard = tp_hard[1:]
-            fp_hard = fp_hard[1:]
-            fn_hard = fn_hard[1:]
-
         if self.stage == 1:
+            # the following is needed for online evaluation. Fake dice (green line)
+            axes = [0] + list(range(2, output.ndim))
+
+            if self.label_manager.has_regions:
+                predicted_segmentation_onehot = (torch.sigmoid(output) > 0.5).long()
+            else:
+                # no need for softmax
+                output_seg = output.argmax(1)[:, None]
+                predicted_segmentation_onehot = torch.zeros(output.shape, device=output.device, dtype=torch.float32)
+                predicted_segmentation_onehot.scatter_(1, output_seg, 1)
+                del output_seg
+
+            if self.label_manager.has_ignore_label:
+                if not self.label_manager.has_regions:
+                    mask = (target != self.label_manager.ignore_label).float()
+                    # CAREFUL that you don't rely on target after this line!
+                    target[target == self.label_manager.ignore_label] = 0
+                else:
+                    mask = 1 - target[:, -1:]
+                    # CAREFUL that you don't rely on target after this line!
+                    target = target[:, :-1]
+            else:
+                mask = None
+
+            tp, fp, fn, _ = get_tp_fp_fn_tn(predicted_segmentation_onehot, target, axes=axes, mask=mask)
+
+            tp_hard = tp.detach().cpu().numpy()
+            fp_hard = fp.detach().cpu().numpy()
+            fn_hard = fn.detach().cpu().numpy()
+            if not self.label_manager.has_regions:
+                # if we train with regions all segmentation heads predict some kind of foreground. In conventional
+                # (softmax training) there needs tobe one output for the background. We are not interested in the
+                # background Dice
+                # [1:] in order to remove background
+                tp_hard = tp_hard[1:]
+                fp_hard = fp_hard[1:]
+                fn_hard = fn_hard[1:]
             return {'loss': l.detach().cpu().numpy(), 'tp_hard': tp_hard, 'fp_hard': fp_hard, 'fn_hard': fn_hard}
         else:
             b, c, _, h, w = key_last.shape
-            center = torch.zeros((b, c, len(self.plans_manager.plans['biases']), 3), dtype=torch.float32,device=self.device)
-            center_predict = torch.zeros((b, c, len(self.plans_manager.plans['biases']), 3), dtype=torch.float32,device=self.device)
+            center = torch.zeros((b, 4, 3), dtype=torch.float32, device=self.device)  # Hard-code here
+            center_predict = torch.zeros((b, 4, 3), dtype=torch.float32, device=self.device)
             self.actual_count = 0
 
             for batch_idx in range(b):
-                for channel_idx in range(c):
-                    kernel = key_last[batch_idx, channel_idx]
-                    output = key_out_last[batch_idx, channel_idx]
+                for channel in range(c):
+                    kernel = key_last[batch_idx][channel]
+                    kernel_out = key_out_last[batch_idx][channel]
+                    # print('3',kernel.shape)
+                    # print('4',kernel_out.shape)
+
                     # 使用 torch.where 替换 np.where，条件判断需要调整为 PyTorch 的方式
                     non_zero_indices = torch.where(kernel > 0)
 
@@ -1172,52 +1222,136 @@ class nnUNetTrainer(object):
                         continue
 
                     self.actual_count += 1
-                    for i, bias in enumerate(self.plans_manager.plans['biases']):
-                        adjusted_kernel = kernel - bias - 0.7
-                        adjusted_output = output - bias
 
-                        mask = (adjusted_kernel > 0) & (adjusted_kernel < 1)
-                        if not torch.any(mask):
-                            continue
-                        # 使用 torch.nonzero 替代 np.nonzero，且不需要将结果转换为数组
-                        gt_indices = torch.nonzero(mask, as_tuple=False)
+                    mask = (kernel > 0)
+                    if not torch.any(mask):
+                        print('label has non-zero!!!', channel)
+                        continue
+                    # 使用 torch.nonzero 替代 np.nonzero，且不需要将结果转换为数组
+                    max_val = kernel[mask].max()
+                    max_indices = (kernel == max_val).nonzero(as_tuple=False)
 
-                        max_index = torch.argmax(adjusted_kernel[mask])
-                        peak_coords_abs = gt_indices[max_index]
-                        center[batch_idx, channel_idx, i, :] = peak_coords_abs
+                    # 计算这些最大值点的中心点
+                    if max_indices.shape[0] > 0:  # 确保至少有一个最大值点
+                        center_point = max_indices.float().mean(dim=0)
+                        center[batch_idx, channel, :] = center_point
 
-                        mask_output = (adjusted_output > 0) & (adjusted_output < 1)
-                        if not torch.any(mask_output):
-                            continue
-                        gt_indices_output = torch.nonzero(mask_output, as_tuple=False)
+                    mask_output = (kernel_out > 0)
+                    if not torch.any(mask_output):
+                        print('output has non-zero!!!', channel)
+                        continue
+                    max_val_predict = kernel_out[mask_output].max()
+                    max_indices_predict = (kernel_out == max_val_predict).nonzero(as_tuple=False)
 
-                        max_index_predict = torch.argmax(adjusted_output[mask_output])
-                        peak_coords_abs_predict = gt_indices_output[max_index_predict]
-                        center_predict[batch_idx, channel_idx, i, :] = peak_coords_abs_predict
+                    # 计算这些最大值点的中心点
+                    if max_indices_predict.shape[0] > 0:  # 确保至少有一个最大值点
+                        center_point_predict = max_indices_predict.float().mean(dim=0)
+                        center_predict[batch_idx, channel, :] = center_point_predict
 
-            # 使用 torch.linalg.norm 替代 np.linalg.norm，并在最后计算平均值
-            non_zero_mask = torch.logical_and(center != 0, center_predict != 0)
+                    # # 使用 torch.linalg.norm 替代 np.linalg.norm，并在最后计算平均值
+                    # non_zero_mask = torch.logical_and(center != 0, center_predict != 0)
+                    #
+                    # # 使用掩码过滤出非零元素
+                    # non_zero_center = center[non_zero_mask]
+                    # non_zero_center_predict = center_predict[non_zero_mask]
 
-            # 使用掩码过滤出非零元素
-            non_zero_center = center[non_zero_mask]
-            non_zero_center_predict = center_predict[non_zero_mask]
+                    # 初始化一个与 center 形状相同的全 True 掩码，形状为 (b, 4)
+                    non_zero_mask = torch.ones((b, 4), dtype=torch.bool, device=self.device)
 
-            # 如果有非零元素，计算它们的范数，否则设定一个默认值（例如0或其他适当的值）
+                    # 遍历每个坐标维度（x, y, z）
+                    for i in range(3):  # 最后一个维度的索引是 0, 1, 2
+                        # 对每个维度的每个点进行检查，确保其在该维度上的值不为 0
+                        non_zero_mask &= (center[..., i] != 0) & (center_predict[..., i] != 0)
+
+                    # 使用更新后的掩码 (b, 4) 来过滤出所有维度都非零的点
+                    non_zero_center = center[non_zero_mask.unsqueeze(-1).repeat(1, 1, 3)]
+                    non_zero_center_predict = center_predict[non_zero_mask.unsqueeze(-1).repeat(1, 1, 3)]
+
+                # 如果有非零元素，计算它们的范数，否则设定一个默认值（例如0或其他适当的值）
             if non_zero_center.nelement() > 0:
-                total_distance = torch.linalg.norm(non_zero_center - non_zero_center_predict, dim=-1)
-                total_distance = torch.mean(total_distance)  # 取平均
-            else:
-                total_distance = torch.tensor(0.0)  # 或者任何适当的默认值
+                assert non_zero_center.shape == non_zero_center_predict.shape
+                num_points = non_zero_center.shape[0]
+                # print("num", num_points)
+                # assert num_points % 3 == 0  # 确保点的总数能被3整除
 
-        return {'loss': l.detach().cpu().numpy(), 'tp_hard': tp_hard, 'fp_hard': fp_hard, 'fn_hard': fn_hard, 'key_center_dist': total_distance.detach().cpu().numpy()}
+                # 将点分组，每组3个点
+                grouped_non_zero_center = non_zero_center.view(-1, 3)
+                grouped_non_zero_center_predict = non_zero_center_predict.view(-1, 3)
+
+                # 计算每组点的距离
+                group_distances = torch.linalg.norm(grouped_non_zero_center - grouped_non_zero_center_predict, dim=-1)
+
+                # 计算每组中3个点的平均距离，然后对所有组的平均距离再次取平均
+                total_distance = torch.mean(group_distances)  # 对所有组的平均距离再次取平均
+            else:
+                total_distance = torch.tensor(10000.0)  # 或者任何适当的默认值
+            # b, c, _, h, w = key_last.shape  # c is 1 here
+            # center = torch.zeros((b, 4, 3), dtype=torch.float32, device=self.device)  # Hard-code here
+            # center_predict = torch.zeros((b, 4, 3), dtype=torch.float32, device=self.device)
+            # self.actual_count = 0
+            #
+            # for batch_idx in range(b):
+            #     kernel = key_last[batch_idx][0]
+            #     kernel_out = key_out_last[batch_idx][0]
+            #     # print('3',kernel.shape)
+            #     # print('4',kernel_out.shape)
+            #
+            #     # 使用 torch.where 替换 np.where，条件判断需要调整为 PyTorch 的方式
+            #     non_zero_indices = torch.where(kernel > 0)
+            #
+            #     if non_zero_indices[0].numel() == 0:  # 使用 numel() 方法检查非零元素数量
+            #         continue
+            #
+            #     self.actual_count += 1
+            #     for i, bias in enumerate(self.plans_manager.plans['biases']):
+            #         adjusted_kernel = kernel - bias - 0.7
+            #         adjusted_output = kernel_out - bias
+            #
+            #         mask = (adjusted_kernel > 0) & (adjusted_kernel < 1)
+            #         if not torch.any(mask):
+            #             continue
+            #         # 使用 torch.nonzero 替代 np.nonzero，且不需要将结果转换为数组
+            #         gt_indices = torch.nonzero(mask, as_tuple=False)
+            #
+            #         max_index = torch.argmax(adjusted_kernel[mask])
+            #         peak_coords_abs = gt_indices[max_index]
+            #         # print('peak', peak_coords_abs.shape)
+            #         center[batch_idx, i, :] = peak_coords_abs
+            #
+            #         mask_output = (adjusted_output > 0) & (adjusted_output < 1)
+            #         if not torch.any(mask_output):
+            #             continue
+            #         gt_indices_output = torch.nonzero(mask_output, as_tuple=False)
+            #
+            #         max_index_predict = torch.argmax(adjusted_output[mask_output])
+            #         peak_coords_abs_predict = gt_indices_output[max_index_predict]
+            #         # print(peak_coords_abs_predict.shape)
+            #         center_predict[batch_idx, i, :] = peak_coords_abs_predict
+            #
+            #     # 使用 torch.linalg.norm 替代 np.linalg.norm，并在最后计算平均值
+            #     non_zero_mask = torch.logical_and(center != 0, center_predict != 0)
+            #
+            #     # 使用掩码过滤出非零元素
+            #     non_zero_center = center[non_zero_mask]
+            #     non_zero_center_predict = center_predict[non_zero_mask]
+            #
+            # # 如果有非零元素，计算它们的范数，否则设定一个默认值（例如0或其他适当的值）
+            # if non_zero_center.nelement() > 0:
+            #     total_distance = torch.linalg.norm(non_zero_center - non_zero_center_predict, dim=-1)
+            #     total_distance = torch.mean(total_distance)  # 取平均
+            # else:
+            #     total_distance = torch.tensor(0.0)  # 或者任何适当的默认值
+
+            return {'loss': l.detach().cpu().numpy(), 'key_center_dist': total_distance.detach().cpu().numpy()}
 
 
 
     def on_validation_epoch_end(self, val_outputs: List[dict]):
         outputs_collated = collate_outputs(val_outputs)
-        tp = np.sum(outputs_collated['tp_hard'], 0)
-        fp = np.sum(outputs_collated['fp_hard'], 0)
-        fn = np.sum(outputs_collated['fn_hard'], 0)
+        if self.stage == 1:
+            tp = np.sum(outputs_collated['tp_hard'], 0)
+            fp = np.sum(outputs_collated['fp_hard'], 0)
+            fn = np.sum(outputs_collated['fn_hard'], 0)
 
         if self.is_ddp:
             world_size = dist.get_world_size()
@@ -1240,11 +1374,20 @@ class nnUNetTrainer(object):
         else:
             loss_here = np.mean(outputs_collated['loss'])
 
-        global_dc_per_class = [i for i in [2 * i / (2 * i + j + k) for i, j, k in
-                                           zip(tp, fp, fn)]]
-        mean_fg_dice = np.nanmean(global_dc_per_class)
-        self.logger.log('mean_fg_dice', mean_fg_dice, self.current_epoch)
-        self.logger.log('dice_per_class_or_region', global_dc_per_class, self.current_epoch)
+        if self.stage == 1:
+            precision = [i for i in [i/(i + j) for i, j in
+                                               zip(tp, fp)]]
+            recall = [i for i in [i / (i + j) for i, j in
+                                     zip(tp, fn)]]
+            global_dc_per_class = [i for i in [2 * i / (2 * i + j + k) for i, j, k in
+                                               zip(tp, fp, fn)]]
+            mean_fg_dice = np.nanmean(global_dc_per_class)
+            mean_precision = np.nanmean(precision)
+            mean_recall = np.nanmean(recall)
+            self.logger.log('mean_fg_dice', mean_fg_dice, self.current_epoch)
+            self.logger.log('dice_per_class_or_region', global_dc_per_class, self.current_epoch)
+            self.logger.log('mean_precision', mean_precision, self.current_epoch)
+            self.logger.log('mean_recall', mean_recall, self.current_epoch)
         self.logger.log('val_losses', loss_here, self.current_epoch)
         if self.stage != 1:
             total_dist = np.mean(outputs_collated['key_center_dist'], 0)
@@ -1259,8 +1402,14 @@ class nnUNetTrainer(object):
         # todo find a solution for this stupid shit
         self.print_to_log_file('train_loss', np.round(self.logger.my_fantastic_logging['train_losses'][-1], decimals=4))
         self.print_to_log_file('val_loss', np.round(self.logger.my_fantastic_logging['val_losses'][-1], decimals=4))
-        self.print_to_log_file('Pseudo dice', [np.round(i, decimals=4) for i in
-                                               self.logger.my_fantastic_logging['dice_per_class_or_region'][-1]])
+        if self.stage == 1:
+            self.print_to_log_file('Pseudo dice', [np.round(i, decimals=4) for i in
+                                                   self.logger.my_fantastic_logging['dice_per_class_or_region'][-1]])
+            self.print_to_log_file('mean_precision',
+                                   np.round(self.logger.my_fantastic_logging['mean_precision'][-1], decimals=4))
+            self.print_to_log_file('mean_recall', np.round(self.logger.my_fantastic_logging['mean_recall'][-1], decimals=4))
+        else:
+            self.print_to_log_file('mean_dist', np.round(self.logger.my_fantastic_logging['total_dist'][-1], decimals=4))
         self.print_to_log_file(
             f"Epoch time: {np.round(self.logger.my_fantastic_logging['epoch_end_timestamps'][-1] - self.logger.my_fantastic_logging['epoch_start_timestamps'][-1], decimals=2)} s")
 
@@ -1272,15 +1421,19 @@ class nnUNetTrainer(object):
             self.save_checkpoint(join(self.output_folder, 'checkpoint_latest.pth'))
 
         # handle 'best' checkpointing. ema_fg_dice is computed by the logger and can be accessed like this
-        if self._best_ema is None or self.logger.my_fantastic_logging['ema_fg_dice'][-1] > self._best_ema:
-            self._best_ema = self.logger.my_fantastic_logging['ema_fg_dice'][-1]
-            self.print_to_log_file(f"Yayy! New best EMA pseudo Dice: {np.round(self._best_ema, decimals=4)}")
-            if self.stage == 1:
-                self.save_checkpoint(join(self.output_folder, 'checkpoint_best.pth'))
-            elif self.stage == 2:
-                self.save_checkpoint(join(self.output_folder, 'checkpoint_best_key.pth'))
-            else:
-                self.save_checkpoint(join(self.output_folder, 'checkpoint_best_merge_final.pth'))
+        # if self._best_ema is None or self.logger.my_fantastic_logging['ema_fg_dice'][-1] > self._best_ema:
+        #     self._best_ema = self.logger.my_fantastic_logging['ema_fg_dice'][-1]
+        #     self.print_to_log_file(f"Yayy! New best EMA pseudo Dice: {np.round(self._best_ema, decimals=4)}")
+        #     if self.stage == 1:
+        #         self.save_checkpoint(join(self.output_folder, 'checkpoint_best.pth'))
+        #     elif self.stage == 2:
+        #         self.save_checkpoint(join(self.output_folder, 'checkpoint_best_key.pth'))
+        #     else:
+        #         self.save_checkpoint(join(self.output_folder, 'checkpoint_best_merge_final.pth'))
+        if self._best_dist is None or self.logger.my_fantastic_logging['total_dist'][-1] < self._best_dist:
+            self._best_dist = self.logger.my_fantastic_logging['total_dist'][-1]
+            self.print_to_log_file(f"Yayy! New best dist: {np.round(self._best_dist, decimals=4)}")
+            self.save_checkpoint(join(self.output_folder, 'checkpoint_best_key.pth'))
 
         if self.local_rank == 0:
             self.logger.plot_progress_png(self.output_folder)
@@ -1392,7 +1545,10 @@ class nnUNetTrainer(object):
                                                      allowed_num_queued=2)
 
                 self.print_to_log_file(f"predicting {k}")
-                data, seg, properties, key = dataset_val.load_case(k, stage=self.stage)
+                if self.stage == 1:
+                    data, seg, properties, key = dataset_val.load_case(k, stage=self.stage)
+                else:
+                    data, properties, key = dataset_val.load_case(k, stage=self.stage)
 
                 if self.is_cascaded:
                     data = np.vstack((data, convert_labelmap_to_one_hot(seg[-1], self.label_manager.foreground_labels,
@@ -1417,20 +1573,22 @@ class nnUNetTrainer(object):
                         prediction, prediction_key = predictor.predict_sliding_window_return_logits(data)
                     predictor.perform_everything_on_gpu = True
 
-                prediction = prediction.cpu()
-                if self.stage != 1:
+                if self.stage == 1:
+                    prediction = prediction.cpu()
+                else:
                     prediction_key = prediction_key.cpu()
 
                 # this needs to go into background processes
-                results.append(
-                    segmentation_export_pool.starmap_async(
-                        export_prediction_from_logits, (
-                            (prediction, properties, self.configuration_manager, self.plans_manager,
-                             self.dataset_json, output_filename_truncated, save_probabilities),
+                if self.stage == 1:
+                    results.append(
+                        segmentation_export_pool.starmap_async(
+                            export_prediction_from_logits, (
+                                (prediction, properties, self.configuration_manager, self.plans_manager,
+                                 self.dataset_json, output_filename_truncated, save_probabilities),
+                            )
                         )
                     )
-                )
-                if self.stage != 1:
+                if self.stage == 2:
                     results.append(
                         segmentation_export_pool.starmap_async(
                             export_prediction_key, (
@@ -1454,7 +1612,10 @@ class nnUNetTrainer(object):
                             # we do this so that we can use load_case and do not have to hard code how loading training cases is implemented
                             tmp = nnUNetDataset(expected_preprocessed_folder, [k],
                                                 num_images_properties_loading_threshold=0)
-                            d, s, p, key = tmp.load_case(k, stage=self.stage)
+                            if self.stage == 1:
+                                d, s, p, key = tmp.load_case(k, stage=self.stage)
+                            else:
+                                d, p, key = tmp.load_case(k, stage=self.stage)
                         except FileNotFoundError:
                             self.print_to_log_file(
                                 f"Predicting next stage {n} failed for case {k} because the preprocessed file is missing! "
@@ -1489,7 +1650,7 @@ class nnUNetTrainer(object):
                                                 self.dataset_json["file_ending"],
                                                 self.label_manager.foreground_regions if self.label_manager.has_regions else
                                                 self.label_manager.foreground_labels,
-                                                self.label_manager.ignore_label, chill=True, configuration_manager=self.configuration_manager, plans_manager=self.plans_manager)
+                                                self.label_manager.ignore_label, chill=True, configuration_manager=self.configuration_manager, plans_manager=self.plans_manager, stage=self.stage)
             self.print_to_log_file("Validation complete", also_print_to_console=True)
             self.print_to_log_file("Mean Validation Dice: ", (metrics['foreground_mean']["Dice"]), also_print_to_console=True)
 

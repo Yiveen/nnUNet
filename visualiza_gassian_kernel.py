@@ -3,7 +3,7 @@ from mayavi import mlab
 import numpy as np
 
 # 加载.npz文件
-data = np.load(r'E:\GuidedResearchProject\nnUNet\nnUNet_preprocessed\Dataset027_Aorta\nnUNetPlans_3d_fullres\arota_024_key.npz')
+data = np.load(r'E:\GuidedResearchProject\nnUNet\nnUNet_preprocessed\Dataset027_Aorta\nnUNetPlans_3d_fullres\arota_010_categoryk.npz')
 
 # .npz文件中可能包含多个数组，使用关键字来访问特定的数组
 # 假设我们想要加载名为'gaussian_kernel'的数组
@@ -14,38 +14,38 @@ print(gaussian_kernel.shape)
 
 
 
-# mask = (gaussian_kernel == 0)
-# gaussian_kernel[mask] = 0.2
-#
-# # 创建一个新的场景
-# fig = mlab.figure(bgcolor=(1, 1, 1))
-#
-# # 为数据创建一个体积渲染对象
-# src = mlab.pipeline.scalar_field(gaussian_kernel)
-# vol = mlab.pipeline.volume(src, vmin=gaussian_kernel.min()-0.2, vmax=gaussian_kernel.max())
-#
-# # 定义颜色映射
-# new_ctf = np.zeros((256, 4), dtype=np.uint8)
-# new_ctf[0, :] = [255, 255, 100, 255]  # 浅黄色，对应数据值0
-# new_ctf[1:64, :] = [255, 255, 100, 255]   # 浅黄色，对应数据值接近0
-# new_ctf[64:128, :] = [0, 0, 255, 255]    # 蓝色，对应数据值1到2
-# new_ctf[128:192, :] = [255, 0, 0, 255]   # 红色，对应数据值2到3
-# new_ctf[192:256, :] = [0, 255, 0, 255]   # 绿色，对应数据值3到4
-#
-# # 应用新的颜色映射表
-# vol.module_manager.scalar_lut_manager.lut.table = new_ctf
-#
-# # 更新颜色传输函数和体积渲染
-# vol.update_ctf = True
-# vol._volume_property.modified()
-# vol._ctf.modified()
-# vol._otf.modified()
-#
-# # 显示图形
-# mlab.show()
-#
-# # 显示图形
-# mlab.show()
+mask = (gaussian_kernel == 0)
+gaussian_kernel[mask] = 0.2
+
+# 创建一个新的场景
+fig = mlab.figure(bgcolor=(1, 1, 1))
+
+# 为数据创建一个体积渲染对象
+src = mlab.pipeline.scalar_field(gaussian_kernel)
+vol = mlab.pipeline.volume(src, vmin=gaussian_kernel.min()-0.2, vmax=gaussian_kernel.max())
+
+# 定义颜色映射
+new_ctf = np.zeros((256, 4), dtype=np.uint8)
+new_ctf[0, :] = [255, 255, 100, 255]  # 浅黄色，对应数据值0
+new_ctf[1:64, :] = [255, 255, 100, 255]   # 浅黄色，对应数据值接近0
+new_ctf[64:128, :] = [0, 0, 255, 255]    # 蓝色，对应数据值1到2
+new_ctf[128:192, :] = [255, 0, 0, 255]   # 红色，对应数据值2到3
+new_ctf[192:256, :] = [0, 255, 0, 255]   # 绿色，对应数据值3到4
+
+# 应用新的颜色映射表
+vol.module_manager.scalar_lut_manager.lut.table = new_ctf
+
+# 更新颜色传输函数和体积渲染
+vol.update_ctf = True
+vol._volume_property.modified()
+vol._ctf.modified()
+vol._otf.modified()
+
+# 显示图形
+mlab.show()
+
+# 显示图形
+mlab.show()
 
 
 # import numpy as np

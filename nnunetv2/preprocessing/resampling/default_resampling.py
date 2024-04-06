@@ -28,6 +28,14 @@ def compute_new_shape(old_shape: Union[Tuple[int, ...], List[int], np.ndarray],
     new_shape = np.array([int(round(i / j * k)) for i, j, k in zip(old_spacing, new_spacing, old_shape)])
     return new_shape
 
+def compute_new_spacing(old_shape: Union[Tuple[int, ...], List[int], np.ndarray],
+                      old_spacing: Union[Tuple[float, ...], List[float], np.ndarray],
+                      new_shape: Union[Tuple[int, ...], List[int], np.ndarray]) -> np.ndarray:
+    assert len(old_spacing) == len(old_shape)
+    assert len(old_shape) == len(new_shape)
+    new_spacing = np.array([i / j * k for i, j, k in zip(old_shape, new_shape, old_spacing)])
+    return new_spacing
+
 
 def resample_data_or_seg_to_spacing(data: np.ndarray,
                                     current_spacing: Union[Tuple[float, ...], List[float], np.ndarray],

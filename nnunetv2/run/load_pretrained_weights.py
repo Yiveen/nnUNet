@@ -31,15 +31,15 @@ def load_pretrained_weights(network, fname, verbose=False, stage=1):
 
     model_dict = mod.state_dict()
     # verify that all but the segmentation layers have the same shape
-    for key, _ in model_dict.items():
-        if all([i not in key for i in skip_strings_in_pretrained]):
-            assert key in pretrained_dict, \
-                f"Key {key} is missing in the pretrained model weights. The pretrained weights do not seem to be " \
-                f"compatible with your network."
-            assert model_dict[key].shape == pretrained_dict[key].shape, \
-                f"The shape of the parameters of key {key} is not the same. Pretrained model: " \
-                f"{pretrained_dict[key].shape}; your network: {model_dict[key]}. The pretrained model " \
-                f"does not seem to be compatible with your network."
+    # for key, _ in model_dict.items():
+    #     if all([i not in key for i in skip_strings_in_pretrained]):
+    #         assert key in pretrained_dict, \
+    #             f"Key {key} is missing in the pretrained model weights. The pretrained weights do not seem to be " \
+    #             f"compatible with your network."
+    #         assert model_dict[key].shape == pretrained_dict[key].shape, \
+    #             f"The shape of the parameters of key {key} is not the same. Pretrained model: " \
+    #             f"{pretrained_dict[key].shape}; your network: {model_dict[key]}. The pretrained model " \
+    #             f"does not seem to be compatible with your network."
 
     # fun fact: in principle this allows loading from parameters that do not cover the entire network. For example pretrained
     # encoders. Not supported by this function though (see assertions above)

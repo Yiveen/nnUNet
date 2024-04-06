@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 import nibabel as nib
 
-from nnunetv2.dataset_conversion.generate_dataset_json import generate_dataset_json
+from nnunetv2.dataset_conversion.generate_dataset_json import generate_dataset_json,generate_key_json,generate_AAA_json
 from nnunetv2.paths import nnUNet_raw
 
 
@@ -15,17 +15,19 @@ def make_out_dirs(dataset_id: int, task_name="Aorta"):
     out_labels_dir = out_dir / "labelsTr"
     out_test_dir = out_dir / "imagesTs"
     out_key_dir = out_dir / "keypoints"
+    out_AAA_dir = out_dir / "AAA"
 
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(out_train_dir, exist_ok=True)
     os.makedirs(out_labels_dir, exist_ok=True)
     os.makedirs(out_test_dir, exist_ok=True)
     os.makedirs(out_key_dir, exist_ok=True)
+    os.makedirs(out_AAA_dir, exist_ok=True)
 
-    return out_dir, out_train_dir, out_labels_dir, out_test_dir, out_key_dir
+    return out_dir, out_train_dir, out_labels_dir, out_test_dir, out_key_dir, out_AAA_dir
 
 
-def copy_files(src_data_folder: Path, train_dir: Path, labels_dir: Path, test_dir: Path, test_list: list, out_key_dir: Path):
+def copy_files(src_data_folder: Path, train_dir: Path, labels_dir: Path, test_dir: Path, test_list: list, out_key_dir: Path, out_AAA_dir: Path):
     """Copy files from the ACDC dataset to the nnUNet dataset folder. Returns the number of training cases."""
     patients_train = sorted([f for f in (src_data_folder).iterdir() if (f.is_dir() and str(f) not in test_list and 'points' not in str(f))])
     # for item in src_data_folder.iterdir() :
@@ -49,8 +51,13 @@ def copy_files(src_data_folder: Path, train_dir: Path, labels_dir: Path, test_di
 
                 original_json_file = str(src_data_folder) + '/key_points/' + str(patient_dir.name) + '/' + str(patient_dir.name) + '.json'
                 shutil.copy(original_json_file, out_key_dir / f"arota_{str(patient_dir).split('_')[1].zfill(3)}.json")
+
+                original_AAA_file = str(src_data_folder) + '/AAA/' + str(patient_dir.name) + '/' + 'AAA1.nii'
+                aaa_nii_file = nib.load(original_AAA_file)
+                nib.save(aaa_nii_file, out_AAA_dir / f"arota_{str(patient_dir).split('_')[1].zfill(3)}.nii.gz")
+
                 num_training_cases += 1
-            elif file.suffix == ".nii" and "label" in file.name: #如果考虑更新label，那么旧的label文件就不要带label了
+            elif file.suffix == ".nii" and "VesselMask_2_label" in file.name: #如果考虑更新label，那么旧的label文件就不要带label了
                 # Load the .nii file
                 nii_file = nib.load(str(patient_dir) + "/" + file.name)
                 # Save the file as .nii.gz
@@ -76,8 +83,8 @@ def copy_files(src_data_folder: Path, train_dir: Path, labels_dir: Path, test_di
 
 
 def convert_own(src_data_folder: str, test_list: list, dataset_id=100):
-    out_dir, train_dir, labels_dir, test_dir, out_key_dir = make_out_dirs(dataset_id=dataset_id)
-    num_training_cases = copy_files(Path(src_data_folder), train_dir, labels_dir, test_dir, test_list, out_key_dir)
+    out_dir, train_dir, labels_dir, test_dir, out_key_dir, out_AAA_dir = make_out_dirs(dataset_id=dataset_id)
+    num_training_cases = copy_files(Path(src_data_folder), train_dir, labels_dir, test_dir, test_list, out_key_dir, out_AAA_dir)
 
     generate_dataset_json(
         str(out_dir),
@@ -86,8 +93,38 @@ def convert_own(src_data_folder: str, test_list: list, dataset_id=100):
         },#not sure here!!
         labels={
             "background": 0,
-            "Vessel": 1,
-            "AAA": 2,
+            "Arota": 1,
+        },
+        file_ending=".nii.gz",
+        num_training_cases=num_training_cases,
+        key_ending=".json"
+    )
+
+    generate_key_json(
+        str(out_dir),
+        channel_names={
+            0: "CT",
+        },  # not sure here!!
+        labels={
+            "background": 0,
+            "Key_point1": 1,
+            "Key_point2": 2,
+            "Key_point3": 3,
+            "Key_point4": 4,
+        },
+        file_ending=".nii.gz",
+        num_training_cases=num_training_cases,
+        key_ending=".json"
+    )
+
+    generate_AAA_json(
+        str(out_dir),
+        channel_names={
+            0: "CT",
+        },  # not sure here!!
+        labels={
+            "background": 0,
+            "AAA": 1,
         },
         file_ending=".nii.gz",
         num_training_cases=num_training_cases,

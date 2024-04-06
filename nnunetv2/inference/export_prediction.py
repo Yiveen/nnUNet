@@ -39,7 +39,7 @@ def convert_predicted_key_with_correct_shape(predicted_keys: Union[torch.Tensor,
 
     # put segmentation in bbox (revert cropping)
     segmentation_reverted_cropping = np.zeros((predicted_keys.shape[0],) + properties_dict['shape_before_cropping'],
-                                              dtype=np.uint8 if len(label_manager.foreground_labels) < 255 else np.uint16)
+                                              dtype=np.float64 if len(label_manager.foreground_labels) < 255 else np.uint16)
     slicer = bounding_box_to_slice(properties_dict['bbox_used_for_cropping'])
     for i in range(predicted_keys.shape[0]):
         segmentation_reverted_cropping[i][slicer] = predicted_keys[i]

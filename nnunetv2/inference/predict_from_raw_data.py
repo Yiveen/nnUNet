@@ -40,7 +40,7 @@ class nnUNetPredictor(object):
     def __init__(self,
                  tile_step_size: float = 0.5,
                  use_gaussian: bool = True,
-                 use_mirroring: bool = True,
+                 use_mirroring: bool = False,
                  perform_everything_on_gpu: bool = True,
                  device: torch.device = torch.device('cuda'),
                  verbose: bool = False,
@@ -621,7 +621,7 @@ class nnUNetPredictor(object):
                     n_predictions = torch.zeros(data.shape[1:], dtype=torch.half,
                                                 device=results_device) #(298,385,385)
 
-                    predicted_keys = torch.zeros((2, *data.shape[1:]), #hard-code here
+                    predicted_keys = torch.zeros((4, *data.shape[1:]), #hard-code here
                                                    dtype=torch.half,
                                                    device=results_device)
                     if self.use_gaussian:
@@ -655,7 +655,7 @@ class nnUNetPredictor(object):
                         prediction, prediction_key = self._internal_maybe_mirror_and_predict(workon)
                         prediction = prediction[0].to(results_device)
                         prediction_key = prediction_key[0].to(results_device)
-                    predicted_keys[sl] += (prediction_key * gaussian if self.use_gaussian else prediction_key)
+                        predicted_keys[sl] += (prediction_key * gaussian if self.use_gaussian else prediction_key)
                     predicted_logits[sl] += (prediction * gaussian if self.use_gaussian else prediction)
                     n_predictions[sl[1:]] += (gaussian if self.use_gaussian else 1)
 

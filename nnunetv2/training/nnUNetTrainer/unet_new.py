@@ -5,7 +5,7 @@ from torch import nn
 from torch.nn.modules.conv import _ConvNd
 from torch.nn.modules.dropout import _DropoutNd
 from dynamic_network_architectures.architectures.unet import PlainConvUNet, ResidualEncoderUNet
-from .ExtendDecoder import ExtendUNetDecoder
+from .ExtendDecoder import ExtendUNetDecoder, NOENDUNetDecoder
 
 class ExtendConvUNet(PlainConvUNet):
     def __init__(self,
@@ -39,6 +39,8 @@ class ExtendConvUNet(PlainConvUNet):
         self.stage = stage
         if self.stage == 1:
             pass
+            # self.decoder = NOENDUNetDecoder(self.encoder, num_classes, n_conv_per_stage_decoder, deep_supervision,
+            #                                  nonlin_first=nonlin_first)
         else:
             self.decoder = ExtendUNetDecoder(self.encoder, num_classes, n_conv_per_stage_decoder, deep_supervision,
                                    nonlin_first=nonlin_first, deep_supervision_key=deep_supervision_key)

@@ -29,6 +29,8 @@ def _convert_to_npy(npz_file: str, unpack_segmentation: bool = True, overwrite_e
         a = np.load(npz_file)  # inexpensive, no compression is done here. This just reads metadata
         b = load_npz_file(npz_file[:-4] + "_key.npz")
         c = load_npz_file(npz_file[:-4] + "_categoryk.npz")
+        d = load_npz_file(npz_file[:-4] + "_aaa.npz")
+        e = load_npz_file(npz_file[:-4] + "seg_down_sampled.npz")
         key_as_float32 = b['key'].astype(np.float32)
         # a_seg = a['seg'] #读取进来会带一个1
         # a_data = a['data']
@@ -37,20 +39,26 @@ def _convert_to_npy(npz_file: str, unpack_segmentation: bool = True, overwrite_e
         if unpack_segmentation and (overwrite_existing or not isfile(npz_file[:-4] + "_seg.npy")):
             np.save(npz_file[:-4] + "_seg.npy", a['seg'])
         if (overwrite_existing or not isfile(npz_file[:-4] + "_key.npy")) and b is not None:
-            key_save_name = npz_file[:-4] + "_key.h5"
-            num_class, z, x, y = key_as_float32.shape
-            key_as_float32_reshaped = key_as_float32.reshape(num_class*z, x*y)
-            sparse_matrix = csr_matrix(key_as_float32_reshaped)
-            with h5py.File(key_save_name, 'w') as f:
-                # 存储稀疏矩阵的数据、行索引和列指针
-                f.create_dataset('data', data=sparse_matrix.data)
-                f.create_dataset('indices', data=sparse_matrix.indices)
-                f.create_dataset('indptr', data=sparse_matrix.indptr)
-                f.create_dataset('shape', data=sparse_matrix.shape)
-                # 将原始形状作为属性存储
-                f.attrs['original_shape'] = key_as_float32.shape
-        if (overwrite_existing or not isfile(npz_file[:-4] + "_categoryk.npy")) and c is not None:
-            np.save(npz_file[:-4] + "_categoryk.npy", c['key'])
+            pass
+            # np.save(npz_file[:-4] + "_key.npy", key_as_float32)
+            # key_save_name = npz_file[:-4] + "_key.h5"
+            # num_class, z, x, y = key_as_float32.shape
+            # key_as_float32_reshaped = key_as_float32.reshape(num_class*z, x*y)
+            # sparse_matrix = csr_matrix(key_as_float32_reshaped)
+            # with h5py.File(key_save_name, 'w') as f:
+            #     # 存储稀疏矩阵的数据、行索引和列指针
+            #     f.create_dataset('data', data=sparse_matrix.data)
+            #     f.create_dataset('indices', data=sparse_matrix.indices)
+            #     f.create_dataset('indptr', data=sparse_matrix.indptr)
+            #     f.create_dataset('shape', data=sparse_matrix.shape)
+            #     # 将原始形状作为属性存储
+            #     f.attrs['original_shape'] = key_as_float32.shape
+        # if (overwrite_existing or not isfile(npz_file[:-4] + "_categoryk.npy")) and c is not None:
+        #     np.save(npz_file[:-4] + "_categoryk.npy", c['key'])
+        if (overwrite_existing or not isfile(npz_file[:-4] + "_aaa.npy")) and d is not None:
+            np.save(npz_file[:-4] + "_aaa.npy", d['seg'])
+        if (overwrite_existing or not isfile(npz_file[:-4] + "seg_down_sampled.npy")) and e is not None:
+            np.save(npz_file[:-4] + "seg_down_sampled.npy", e['seg'])
             # key_save_dir = npz_file[:-4] + "_key.h5"
             #
             #
@@ -82,7 +90,7 @@ def unpack_dataset(folder: str, unpack_segmentation: bool = True, overwrite_exis
     """
     with multiprocessing.get_context("spawn").Pool(num_processes) as p:
         npz_files = subfiles(folder, True, None, ".npz", True)
-        npz_files_filtered = [f for f in npz_files if 'key' not in f and 'category' not in f]
+        npz_files_filtered = [f for f in npz_files if 'key' not in f and 'category' not in f and 'aaa' not in f and 'sampled' not in f]
         p.starmap(_convert_to_npy, zip(npz_files_filtered,
                                        [unpack_segmentation] * len(npz_files_filtered),
                                        [overwrite_existing] * len(npz_files_filtered))

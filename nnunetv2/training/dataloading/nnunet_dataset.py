@@ -53,7 +53,7 @@ class nnUNetDataset(object):
 
             key_files_path = join(folder, f"{c}_key.npz")
             if os.path.exists(key_files_path):
-                self.dataset[c]['key'] = join(folder, f"{c}key.npz")
+                self.dataset[c]['key'] = join(folder, f"{c}_key.npz")
             else:
                 self.dataset[c]['key'] = None
 
@@ -101,25 +101,25 @@ class nnUNetDataset(object):
                 # print('saving open data file')
         else:
             data = np.load(entry['data_file'])['data']
-
-        if 'open_seg_file' in entry.keys():
-            seg = entry['open_seg_file']
-            # print('using open data file')
-        elif isfile(entry['data_file'][:-4] + "_seg.npy"):
-            seg = np.load(entry['data_file'][:-4] + "_seg.npy", 'r')
-            if self.keep_files_open:
-                self.dataset[key]['open_seg_file'] = seg
-                # print('saving open seg file')
-        else:
-            seg = np.load(entry['data_file'])['seg']
+        if stage == 1:
+            if 'open_seg_file' in entry.keys():
+                seg = entry['open_seg_file']
+                # print('using open data file')
+            elif isfile(entry['data_file'][:-4] + "_seg.npy"):
+                seg = np.load(entry['data_file'][:-4] + "_seg.npy", 'r')
+                if self.keep_files_open:
+                    self.dataset[key]['open_seg_file'] = seg
+                    # print('saving open seg file')
+            else:
+                seg = np.load(entry['data_file'])['seg']
 
         key_label = None
 
         if stage == 2 or stage == 3:
             if 'open_key_file' in entry.keys():
                 seg = entry['open_key_file']
-            elif isfile(entry['data_file'][:-4] + "_key.h5"):
-                key_label = np.load(entry['data_file'][:-4] + "_key.npz")['key']
+            elif isfile(entry['data_file'][:-4] + "_key.npy"):
+                key_label = np.load(entry['data_file'][:-4] + "_key.npy", 'r')
                 # with h5py.File(entry['data_file'][:-4] + "_key.h5", 'r') as f:
                 #     # 从文件中读取稀疏矩阵的组成部分
                 #     data_h5 = f['data'][:]
@@ -139,16 +139,19 @@ class nnUNetDataset(object):
             else:
                 key_label = None
 
-        if 'seg_from_prev_stage_file' in entry.keys():
-            if isfile(entry['seg_from_prev_stage_file'][:-4] + ".npy"):
-                seg_prev = np.load(entry['seg_from_prev_stage_file'][:-4] + ".npy", 'r')
-            else:
-                seg_prev = np.load(entry['seg_from_prev_stage_file'])['seg']
-            seg = np.vstack((seg, seg_prev[None]))
+        # if 'seg_from_prev_stage_file' in entry.keys():
+        #     if isfile(entry['seg_from_prev_stage_file'][:-4] + ".npy"):
+        #         seg_prev = np.load(entry['seg_from_prev_stage_file'][:-4] + ".npy", 'r')
+        #     else:
+        #         seg_prev = np.load(entry['seg_from_prev_stage_file'])['seg']
+            # seg = np.vstack((seg, seg_prev[None]))
         # if key_label is None:
         #     return data, seg, entry['properties']
         # else:
-        return data, seg, entry['properties'], key_label
+        if stage == 1:
+            return data, seg, entry['properties'], key_label
+        else:
+            return data, entry['properties'], key_label
 
 
 if __name__ == '__main__':

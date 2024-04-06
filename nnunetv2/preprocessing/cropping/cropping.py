@@ -21,7 +21,7 @@ def create_nonzero_mask(data):
     return nonzero_mask
 
 
-def crop_to_nonzero(data, seg=None, nonzero_label=-1):
+def crop_to_nonzero(data, seg=None, aaa=None, nonzero_label=-1):
     """
 
     :param data:
@@ -33,19 +33,25 @@ def crop_to_nonzero(data, seg=None, nonzero_label=-1):
     bbox = get_bbox_from_mask(nonzero_mask) #bbox: [[0,326],[0,512],[0,512]]
 
     slicer = bounding_box_to_slice(bbox)
-    data = data[tuple([slice(None), *slicer])]
+    if data is not None:
+        data = data[tuple([slice(None), *slicer])]
 
     if seg is not None:
         seg = seg[tuple([slice(None), *slicer])]
+    if aaa is not None:
+        aaa = aaa[tuple([slice(None), *slicer])]
 
     nonzero_mask = nonzero_mask[slicer][None]
     if seg is not None:
         seg[(seg == 0) & (~nonzero_mask)] = nonzero_label
+    if aaa is not None:
+        aaa[(aaa == 0) & (~nonzero_mask)] = nonzero_label
     else:
         nonzero_mask = nonzero_mask.astype(np.int8)
         nonzero_mask[nonzero_mask == 0] = nonzero_label
         nonzero_mask[nonzero_mask > 0] = 0
         seg = nonzero_mask
-    return data, seg, bbox
+        aaa = nonzero_mask
+    return data, seg, bbox, aaa
 
 

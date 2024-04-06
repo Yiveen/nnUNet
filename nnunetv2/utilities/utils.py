@@ -61,11 +61,12 @@ def get_filenames_of_train_images_and_targets(raw_dataset_folder: str, dataset_j
         identifiers = get_identifiers_from_splitted_dataset_folder(join(raw_dataset_folder, 'imagesTr'), dataset_json['file_ending'])
         images = create_lists_from_splitted_dataset_folder(join(raw_dataset_folder, 'imagesTr'), dataset_json['file_ending'], identifiers)
         segs = [join(raw_dataset_folder, 'labelsTr', i + dataset_json['file_ending']) for i in identifiers]
+        aaas = [join(raw_dataset_folder, 'AAA', i + dataset_json['file_ending']) for i in identifiers]
 
         key_file_path = [f for f in os.listdir(join(raw_dataset_folder, 'keypoints')) if f.endswith('.json')]
         if key_file_path:
             keys = [join(raw_dataset_folder, 'keypoints', i + dataset_json['key_ending']) for i in identifiers]
-            dataset = {i: {'images': im, 'label': se, 'key': key} for i, im, se, key in zip(identifiers, images, segs, keys)}
+            dataset = {i: {'images': im, 'label': se, 'key': key,'aaa': aaa} for i, im, se, key, aaa in zip(identifiers, images, segs, keys, aaas)}
         else:
             dataset = {i: {'images': im, 'label': se} for i, im, se in
                        zip(identifiers, images, segs)}

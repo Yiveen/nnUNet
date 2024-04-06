@@ -475,7 +475,7 @@ class ExperimentPlanner(object):
             'label_manager': 'LabelManager',
             'foreground_intensity_properties_per_channel': self.dataset_fingerprint[
                 'foreground_intensity_properties_per_channel'],
-            'k_size': 36,
+            'k_size': 40,
             'sigma': 10,
             'biases': [1, 2, 3, 4]
         }

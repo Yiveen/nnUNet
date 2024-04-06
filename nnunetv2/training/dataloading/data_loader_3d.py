@@ -8,7 +8,8 @@ class nnUNetDataLoader3D(nnUNetDataLoaderBase):
         selected_keys = self.get_indices() #得到的bacth的索引
         # preallocate memory for data and seg
         data_all = np.zeros(self.data_shape, dtype=np.float32)
-        seg_all = np.zeros(self.seg_shape, dtype=np.int16)
+        if self.stage == 1:
+            seg_all = np.zeros(self.seg_shape, dtype=np.int16)
         if self.key_shape is not None:
             key_all = np.zeros(self.key_shape, dtype=np.float32)
         case_properties = []
@@ -18,7 +19,7 @@ class nnUNetDataLoader3D(nnUNetDataLoaderBase):
             # (Lung for example)
             force_fg = self.get_do_oversample(j) #False
 
-            data, seg, properties, key = self._data.load_case(i, stage=self.stage)
+            data, properties, key = self._data.load_case(i, stage=self.stage)#hard-code!!
             case_properties.append(properties)
 
             # If we are doing the cascade then the segmentation from the previous stage will already have been loaded by
@@ -28,7 +29,7 @@ class nnUNetDataLoader3D(nnUNetDataLoaderBase):
             all_zero_count = -1
             while True:
                 all_zero_count += 1
-                bbox_lbs, bbox_ubs = self.get_bbox(shape, force_fg, properties['class_locations'])
+                bbox_lbs, bbox_ubs = self.get_bbox(shape, force_fg, properties['category_k_locations'])
 
                 # whoever wrote this knew what he was doing (hint: it was me). We first crop the data to the region of the
                 # bbox that actually lies within the data. This will result in a smaller array which is then faster to pad.
@@ -41,16 +42,16 @@ class nnUNetDataLoader3D(nnUNetDataLoaderBase):
                 # 使用有效的边界框裁剪数据和分割标签
                 this_slice = tuple([slice(0, data.shape[0])] + [slice(i, j) for i, j in zip(valid_bbox_lbs, valid_bbox_ubs)])
                 data_sliced = data[this_slice]  # 裁剪图像数据
-
-                this_slice = tuple([slice(0, seg.shape[0])] + [slice(i, j) for i, j in zip(valid_bbox_lbs, valid_bbox_ubs)])
-                seg_sliced = seg[this_slice]  # 裁剪分割标签
+                if self.stage == 1:
+                    this_slice = tuple([slice(0, seg.shape[0])] + [slice(i, j) for i, j in zip(valid_bbox_lbs, valid_bbox_ubs)])
+                    seg_sliced = seg[this_slice]  # 裁剪分割标签
 
                 if key is not None and self.stage != 1:
                     this_slice = tuple([slice(0, key.shape[0])] + [slice(i, j) for i, j in zip(valid_bbox_lbs, valid_bbox_ubs)])
                     key_sliced = key[this_slice]  # 裁剪分割标签
                     non_zero_indices = np.where(key_sliced > 0)
                     # if len(non_zero_indices[0]) != 0 or all_zero_count >= 2:
-                    if len(non_zero_indices[0]) != 0:
+                    if len(non_zero_indices[0]) != 0 or len(non_zero_indices[1]) != 0 or len(non_zero_indices[2]) != 0 or len(non_zero_indices[3]) != 0 or all_zero_count >= 2:
                         break
                 else:
                     break
@@ -58,13 +59,15 @@ class nnUNetDataLoader3D(nnUNetDataLoaderBase):
             # 计算填充的大小，保证裁剪后的数据和分割标签与补丁大小匹配， 因为实际上并没有对need_to_pad进行处理
             padding = [(-min(0, bbox_lbs[i]), max(bbox_ubs[i] - shape[i], 0)) for i in range(dim)]
             data_all[j] = np.pad(data_sliced, ((0, 0), *padding), 'constant', constant_values=0)  # 填充图像数据
-            seg_all[j] = np.pad(seg_sliced, ((0, 0), *padding), 'constant', constant_values=-1)  # 填充分割标签
+            if self.stage == 1:
+                seg_all[j] = np.pad(seg_sliced, ((0, 0), *padding), 'constant', constant_values=-1)  # 填充分割标签
 
             if key is not None:
                 # for category in range(key.shape[0]):
                 key_all[j] = np.pad(key_sliced, ((0, 0), *padding), 'constant', constant_values=0)  # 填充key标签
         if self.stage != 1:
-            return {'data': data_all, 'seg': seg_all, 'properties': case_properties, 'keys': selected_keys,
+            # print('11111', key_all.shape)
+            return {'data': data_all, 'properties': case_properties, 'keys': selected_keys,
                 'key_points': key_all}
         else:
             # 返回包含图像数据、分割标签、样本属性和样本键的字典

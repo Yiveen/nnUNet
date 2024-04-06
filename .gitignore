@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+*.nii
 
 # Distribution / packaging
 .Python
@@ -26,6 +27,7 @@ var/
 nnUNet_preprocessed/
 nnUNet_raw/
 nnUNet_results/
+
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

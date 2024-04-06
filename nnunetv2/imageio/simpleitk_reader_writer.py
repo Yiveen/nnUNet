@@ -134,10 +134,12 @@ class SimpleITKIO(BaseReaderWriter):
         assert 1 < output_dimension < 4
         if output_dimension == 2:
             key = key[0]
+        for i in range(4):
+            print('itk_max', key[i].max())
+            print('itk_image', key[i].shape)
+            itk_image = sitk.GetImageFromArray(key[i])
+            itk_image.SetSpacing(properties['sitk_stuff']['spacing'])
+            itk_image.SetOrigin(properties['sitk_stuff']['origin'])
+            itk_image.SetDirection(properties['sitk_stuff']['direction'])
 
-        itk_image = sitk.GetImageFromArray(key.astype(np.uint8))
-        itk_image.SetSpacing(properties['sitk_stuff']['spacing'])
-        itk_image.SetOrigin(properties['sitk_stuff']['origin'])
-        itk_image.SetDirection(properties['sitk_stuff']['direction'])
-
-        sitk.WriteImage(itk_image, output_fname, True)
+            sitk.WriteImage(itk_image, output_fname[:-7] + str(i) + '.nii.gz', True)

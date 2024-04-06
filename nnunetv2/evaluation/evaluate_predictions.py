@@ -207,7 +207,8 @@ def compute_metrics_on_folder(folder_ref: str, folder_pred: str, output_file: st
                               num_processes: int = default_num_processes,
                               chill: bool = True,
                               configuration_manager: ConfigurationManager = None,
-                              plans_manager: PlansManager =None) -> dict:
+                              plans_manager: PlansManager =None,
+                              stage: int = 1) -> dict:
     """
     output_file must end with .json; can be None
     """
@@ -225,7 +226,8 @@ def compute_metrics_on_folder(folder_ref: str, folder_pred: str, output_file: st
         present = [isfile(join(folder_pred, i)) for i in files_ref]
         assert all(present), "Not all files in folder_pred exist in folder_ref"
     files_ref = [join(folder_ref, i) for i in files_pred if i in files_ref]
-    files_ref = [item for item in files_ref for _ in range(2)]
+    if stage == 2:
+        files_ref = [item for item in files_ref for _ in range(2)]
     files_pred = [join(folder_pred, i) for i in files_pred]
     with multiprocessing.get_context("spawn").Pool(num_processes) as pool:
         # for i in list(zip(files_ref, files_pred, [image_reader_writer] * len(files_pred), [regions_or_labels] * len(files_pred), [ignore_label] * len(files_pred))):

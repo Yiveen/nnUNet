@@ -35,7 +35,7 @@ class LabelManager(object):
         self._ignore_label: Union[None, int] = self._determine_ignore_label()
         self._all_labels: List[int] = self._get_all_labels()
 
-        self._regions: Union[None, List[Union[int, Tuple[int, ...]]]] = self._get_regions()
+        self._regions: Union[None, List[Union[int, Tuple[int, ...]]]] = self._get_regions() #这些带_的变量只是类内的保护变量！！
 
         if self.has_ignore_label:
             assert self.ignore_label == max(

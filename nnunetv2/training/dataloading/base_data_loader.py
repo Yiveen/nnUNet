@@ -37,7 +37,7 @@ class nnUNetDataLoaderBase(DataLoader):
             self.need_to_pad += pad_sides
         self.num_channels = None
         self.pad_sides = pad_sides
-        self.data_shape, self.seg_shape, self.key_shape = self.determine_shapes()
+        self.data_shape, self.key_shape = self.determine_shapes()
         self.sampling_probabilities = sampling_probabilities
         self.annotated_classes_key = tuple(label_manager.all_labels)
         self.has_ignore = label_manager.has_ignore_label
@@ -56,16 +56,26 @@ class nnUNetDataLoaderBase(DataLoader):
 
     def determine_shapes(self):
         # load one case
-        data, seg, properties, key = self._data.load_case(self.indices[0], stage=self.stage) #这里会走dataset里面的load_case
-        num_color_channels = data.shape[0]
+        if self.stage == 1:
+            data, seg, properties, key = self._data.load_case(self.indices[0], stage=self.stage) #这里会走dataset里面的load_case
+            num_color_channels = data.shape[0]
 
-        data_shape = (self.batch_size, num_color_channels, *self.patch_size) #num_color_channels=1
-        seg_shape = (self.batch_size, seg.shape[0], *self.patch_size) #seg.shape[0]=1
-        key_shape = None
-        if key is not None:
-            key_shape = (self.batch_size, key.shape[0], *self.patch_size)
-        return data_shape, seg_shape, key_shape
+            data_shape = (self.batch_size, num_color_channels, *self.patch_size) #num_color_channels=1
+            seg_shape = (self.batch_size, seg.shape[0], *self.patch_size) #seg.shape[0]=1
+            key_shape = None
+            if key is not None:
+                key_shape = (self.batch_size, key.shape[0], *self.patch_size)
+            return data_shape, seg_shape, key_shape
+        else:
+            data, properties, key = self._data.load_case(self.indices[0],
+                                                              stage=self.stage)  # 这里会走dataset里面的load_case
+            num_color_channels = data.shape[0]
 
+            data_shape = (self.batch_size, num_color_channels, *self.patch_size)  # num_color_channels=1
+            key_shape = None
+            if key is not None:
+                key_shape = (self.batch_size, key.shape[0], *self.patch_size)
+            return data_shape, key_shape
     def get_bbox(self, data_shape: np.ndarray, force_fg: bool, class_locations: Union[dict, None],
                  overwrite_class: Union[int, Tuple[int, ...]] = None, verbose: bool = False):
         # in dataloader 2d we need to select the slice prior to this and also modify the class_locations to only have

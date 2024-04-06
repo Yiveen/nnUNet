@@ -5,14 +5,14 @@ import SimpleITK as sitk
 import os
 # from mayavi import mlab
 from matplotlib import pyplot as plt
-from vmtk import vmtkscripts
-import vtk
-from vtk.util import numpy_support
-from vtk.util.numpy_support import numpy_to_vtk
-import numpy as np
-import vmtk.vmtkcenterlines as centerlines
-import vmtk.vmtksurfaceviewer as surfaceviewer
-import itk
+# from vmtk import vmtkscripts
+# import vtk
+# from vtk.util import numpy_support
+# from vtk.util.numpy_support import numpy_to_vtk
+# import numpy as np
+# import vmtk.vmtkcenterlines as centerlines
+# import vmtk.vmtksurfaceviewer as surfaceviewer
+# import itk
 def compute(infile, outfile):
     """
     Calls VMTK routine for centerline extraction.
@@ -115,7 +115,7 @@ def find_branch_points(skeleton):
     return np.array(branch_points)
 
 
-DEBUG = False
+DEBUG = True
 CACHE = True
 
 # 读取血管图像
@@ -165,7 +165,7 @@ erode_filter.SetKernelRadius(2)  # 设置腐蚀核半径
 eroded_image = erode_filter.Execute(dilated_image)
 
 # 执行连通区域分析，即为将整个分割分成多个块
-connected_component_image = sitk.ConnectedComponent(original_image)
+connected_component_image = sitk.ConnectedComponent(eroded_image)
 # 使用LabelShapeStatisticsImageFilter计算形态学特征，Execute 更新形态学特征计算，对每个块进行形态学（大小，label）的分析
 original_shape_analysis = sitk.LabelShapeStatisticsImageFilter()
 original_shape_analysis.Execute(connected_component_image)
